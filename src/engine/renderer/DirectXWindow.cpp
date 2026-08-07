@@ -96,6 +96,19 @@ bool DirectXWindow::initDirectX() {
     return true;
 }
 
+void DirectXWindow::setMediaSource(std::shared_ptr<IMediaSource> source) {
+    if (m_mediaSource && m_mediaSource != source) {
+        m_mediaSource->close();
+    }
+    m_mediaSource = source;
+    if (m_mediaSource) {
+        m_mediaSource->open();
+    }
+    if (m_renderer) {
+        m_renderer->setMediaSource(m_mediaSource);
+    }
+}
+
 QPaintEngine* DirectXWindow::paintEngine() const {
     return nullptr;
 }

@@ -113,9 +113,10 @@ bool Renderer::initShadersAndBuffers() {
     };
 
     D3D11_BUFFER_DESC bufferDesc = {};
-    bufferDesc.Usage = D3D11_USAGE_DEFAULT;
+    bufferDesc.Usage = D3D11_USAGE_DYNAMIC;
     bufferDesc.ByteWidth = sizeof(quadVertices);
     bufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    bufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
     D3D11_SUBRESOURCE_DATA initData = {};
     initData.pSysMem = quadVertices;
@@ -123,12 +124,13 @@ bool Renderer::initShadersAndBuffers() {
     hr = m_device->CreateBuffer(&bufferDesc, &initData, m_vertexBuffer.ReleaseAndGetAddressOf());
     if (FAILED(hr)) return false;
 
-    // Create Sampler State
+    // Create Sampler State (Anisotropic filtering)
     D3D11_SAMPLER_DESC samplerDesc = {};
-    samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    samplerDesc.Filter = D3D11_FILTER_ANISOTROPIC;
     samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
     samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
     samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    samplerDesc.MaxAnisotropy = 16;
 
     hr = m_device->CreateSamplerState(&samplerDesc, m_samplerState.ReleaseAndGetAddressOf());
     if (FAILED(hr)) return false;
@@ -188,10 +190,16 @@ void Renderer::renderFrame() {
 
     // Set Viewport to match swap chain backbuffer size
     DXGI_SWAP_CHAIN_DESC scd = {};
-    if (SUCCEEDED(m_swapChain->GetDesc(&scd))) {
+    float windowW = 1280.0f;
+    float windowH = 720.0f;
+
+    if (SUCCEEDED(m_swapChain->GetDesc(&scd)) && scd.BufferDesc.Width > 0 && scd.BufferDesc.Height > 0) {
+        windowW = static_cast<float>(scd.BufferDesc.Width);
+        windowH = static_cast<float>(scd.BufferDesc.Height);
+
         D3D11_VIEWPORT vp = {};
-        vp.Width = static_cast<float>(scd.BufferDesc.Width);
-        vp.Height = static_cast<float>(scd.BufferDesc.Height);
+        vp.Width = windowW;
+        vp.Height = windowH;
         vp.MinDepth = 0.0f;
         vp.MaxDepth = 1.0f;
         vp.TopLeftX = 0.0f;
@@ -200,7 +208,7 @@ void Renderer::renderFrame() {
     }
 
     // Clear background
-    float clearColor[4] = { 0.1f, 0.1f, 0.12f, 1.0f };
+    float clearColor[4] = { 0.08f, 0.08f, 0.1f, 1.0f };
     m_context->ClearRenderTargetView(m_renderTargetView.Get(), clearColor);
     m_context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), nullptr);
 
@@ -226,6 +234,36 @@ void Renderer::renderFrame() {
 
     // Draw textured quad if texture is valid
     if (m_textureInitialized && m_texture.getShaderResourceView()) {
+        float videoW = static_cast<float>(m_texture.width());
+        float videoH = static_cast<float>(m_texture.height());
+
+        float videoAspect = videoW / videoH;
+        float windowAspect = windowW / windowH;
+
+        float scaleX = 1.0f;
+        float scaleY = 1.0f;
+
+        if (windowAspect > videoAspect) {
+            scaleX = videoAspect / windowAspect;
+        } else {
+            scaleY = windowAspect / videoAspect;
+        }
+
+        Vertex quadVertices[] = {
+            { { -scaleX,  scaleY, 0.0f }, { 0.0f, 0.0f } },
+            { {  scaleX,  scaleY, 0.0f }, { 1.0f, 0.0f } },
+            { { -scaleX, -scaleY, 0.0f }, { 0.0f, 1.0f } },
+            { {  scaleX,  scaleY, 0.0f }, { 1.0f, 0.0f } },
+            { {  scaleX, -scaleY, 0.0f }, { 1.0f, 1.0f } },
+            { { -scaleX, -scaleY, 0.0f }, { 0.0f, 1.0f } }
+        };
+
+        D3D11_MAPPED_SUBRESOURCE mappedVB;
+        if (SUCCEEDED(m_context->Map(m_vertexBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedVB))) {
+            memcpy(mappedVB.pData, quadVertices, sizeof(quadVertices));
+            m_context->Unmap(m_vertexBuffer.Get(), 0);
+        }
+
         UINT stride = sizeof(Vertex);
         UINT offset = 0;
 

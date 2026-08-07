@@ -15,6 +15,7 @@ public:
     ~DirectXWindow() override;
 
     bool initDirectX();
+    void setMediaSource(std::shared_ptr<IMediaSource> source);
 
 protected:
     QPaintEngine* paintEngine() const override;

@@ -27,5 +27,24 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(spdlog)
 
+FetchContent_Declare(
+    ffmpeg
+    URL https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip
+)
+FetchContent_MakeAvailable(ffmpeg)
+
+# Locate FFmpeg headers and libraries inside extracted directory
+file(GLOB FFMPEG_SUBDIRS "${ffmpeg_SOURCE_DIR}/ffmpeg-*")
+if(FFMPEG_SUBDIRS)
+    list(GET FFMPEG_SUBDIRS 0 FFMPEG_ROOT_DIR)
+else()
+    set(FFMPEG_ROOT_DIR ${ffmpeg_SOURCE_DIR})
+endif()
+
+set(FFMPEG_INCLUDE_DIR ${FFMPEG_ROOT_DIR}/include CACHE PATH "FFmpeg include dir")
+set(FFMPEG_LIB_DIR ${FFMPEG_ROOT_DIR}/lib CACHE PATH "FFmpeg lib dir")
+set(FFMPEG_BIN_DIR ${FFMPEG_ROOT_DIR}/bin CACHE PATH "FFmpeg bin dir")
+
 # Add subdirectories
 add_subdirectory(src)
+

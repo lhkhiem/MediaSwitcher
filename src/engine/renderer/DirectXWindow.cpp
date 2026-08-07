@@ -1,0 +1,108 @@
+#include "DirectXWindow.h"
+#include "common/logger/Logger.h"
+
+#include <QEvent>
+
+DirectXWindow::DirectXWindow(QWidget *parent)
+    : QWidget(parent)
+{
+    // Tell Qt we will handle rendering ourselves via native window
+    setAttribute(Qt::WA_NativeWindow, true);
+    setAttribute(Qt::WA_PaintOnScreen, true);
+    setAttribute(Qt::WA_NoSystemBackground, true);
+    setAttribute(Qt::WA_OpaquePaintEvent, true);
+
+    LOG_INFO("DirectXWindow created. Window ID: {}", reinterpret_cast<void*>(winId()));
+}
+
+DirectXWindow::~DirectXWindow() {
+    LOG_INFO("DirectXWindow destroyed.");
+}
+
+bool DirectXWindow::initDirectX() {
+    DXGI_SWAP_CHAIN_DESC scd = {};
+    scd.BufferCount = 2; // Double buffering
+    scd.BufferDesc.Width = width();
+    scd.BufferDesc.Height = height();
+    scd.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    scd.BufferDesc.RefreshRate.Numerator = 60;
+    scd.BufferDesc.RefreshRate.Denominator = 1;
+    scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    scd.OutputWindow = reinterpret_cast<HWND>(winId());
+    scd.SampleDesc.Count = 1;
+    scd.SampleDesc.Quality = 0;
+    scd.Windowed = TRUE;
+    scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
+    UINT createDeviceFlags = 0;
+#ifdef _DEBUG
+    createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+
+    D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_11_0 };
+    D3D_FEATURE_LEVEL featureLevel;
+
+    HRESULT hr = D3D11CreateDeviceAndSwapChain(
+        nullptr, // Default adapter
+        D3D_DRIVER_TYPE_HARDWARE,
+        nullptr, // No software device
+        createDeviceFlags,
+        featureLevels,
+        1,
+        D3D11_SDK_VERSION,
+        &scd,
+        m_swapChain.GetAddressOf(),
+        m_d3dDevice.GetAddressOf(),
+        &featureLevel,
+        m_d3dContext.GetAddressOf()
+    );
+
+    if (FAILED(hr)) {
+        LOG_ERROR("Failed to create D3D11 device and swap chain. HRESULT: {0:x}", static_cast<unsigned int>(hr));
+        return false;
+    }
+
+    // Get back buffer and create render target view
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
+    hr = m_swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(backBuffer.GetAddressOf()));
+    if (FAILED(hr)) {
+        LOG_ERROR("Failed to get back buffer.");
+        return false;
+    }
+
+    hr = m_d3dDevice->CreateRenderTargetView(backBuffer.Get(), nullptr, m_renderTargetView.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG_ERROR("Failed to create render target view.");
+        return false;
+    }
+
+    LOG_INFO("DirectX 11 initialized successfully.");
+
+    // Initialize and start renderer
+    m_renderer = std::make_unique<Renderer>();
+    m_renderer->initialize(m_d3dDevice, m_d3dContext, m_swapChain, m_renderTargetView);
+    m_renderer->start();
+
+    return true;
+}
+
+QPaintEngine* DirectXWindow::paintEngine() const {
+    // Return nullptr so Qt doesn't use its own paint engine on this widget
+    return nullptr;
+}
+
+void DirectXWindow::paintEvent(QPaintEvent* event) {
+    Q_UNUSED(event);
+    // Custom render loop will be called here or via a separate render thread
+}
+
+void DirectXWindow::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    
+    // Resize SwapChain if necessary
+    if (m_swapChain && m_renderer) {
+        // Must stop renderer temporarily, release RTV, ResizeBuffers, and recreate RTV.
+        // For Milestone 2, we just let it be, but log it.
+        LOG_INFO("DirectXWindow resized. SwapChain needs resize handling.");
+    }
+}

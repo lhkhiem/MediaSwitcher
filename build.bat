@@ -1,5 +1,10 @@
 @echo off
+taskkill /F /IM MediaSwitcher.exe 2>nul
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
 cmake -S . -B build -DCMAKE_PREFIX_PATH="C:\Qt\6.11.1\msvc2022_64"
-cmake --build build
-C:\Qt\6.11.1\msvc2022_64\bin\windeployqt.exe --no-system-d3d-compiler --no-compiler-runtime build\bin\Debug\MediaSwitcher.exe
+if errorlevel 1 exit /b %errorlevel%
+cmake --build build --config Debug
+if errorlevel 1 exit /b %errorlevel%
+if exist "build\bin\Debug\MediaSwitcher.exe" (
+    C:\Qt\6.11.1\msvc2022_64\bin\windeployqt.exe --no-system-d3d-compiler --no-compiler-runtime build\bin\Debug\MediaSwitcher.exe
+)

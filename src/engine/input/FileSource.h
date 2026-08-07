@@ -7,7 +7,6 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
-#include <queue>
 
 class FileSource : public IMediaSource {
 public:
@@ -42,8 +41,7 @@ private:
     std::thread m_workerThread;
     std::atomic<bool> m_running{false};
 
-    std::mutex m_queueMutex;
-    std::queue<std::shared_ptr<Frame>> m_frameQueue;
-    std::shared_ptr<Frame> m_lastFrame;
-    static constexpr size_t MAX_QUEUE_SIZE = 10;
+    std::mutex m_frameMutex;
+    std::shared_ptr<Frame> m_currentFrame;
+    std::shared_ptr<Frame> m_lastValidFrame;
 };

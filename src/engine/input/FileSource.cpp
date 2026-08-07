@@ -4,7 +4,6 @@
 
 FileSource::FileSource(const std::string& filePath)
     : m_filePath(filePath)
-    , m_framePool(15)
 {
 }
 
@@ -13,23 +12,27 @@ FileSource::~FileSource() {
 }
 
 bool FileSource::open() {
+    if (m_opened) return true;
+
     if (m_filePath.empty()) return false;
 
     if (!m_decoder.open(m_filePath)) {
-        LOG_ERROR("FileSource: Failed to open '{}'", m_filePath);
+        LOG_ERROR("FileSource: Failed to open decoder for '{}'", m_filePath);
         return false;
     }
 
     m_opened = true;
     m_playing = true;
     m_running = true;
-
     m_workerThread = std::thread(&FileSource::decodeWorkerLoop, this);
+
     LOG_INFO("FileSource: Opened '{}' with worker thread.", m_filePath);
     return true;
 }
 
 void FileSource::close() {
+    if (!m_opened) return;
+
     m_running = false;
     m_playing = false;
 
@@ -38,18 +41,14 @@ void FileSource::close() {
     }
 
     m_decoder.close();
-
     {
-        std::lock_guard<std::mutex> lock(m_queueMutex);
-        while (!m_frameQueue.empty()) {
-            m_frameQueue.pop();
-        }
-        m_lastFrame.reset();
+        std::lock_guard<std::mutex> lock(m_frameMutex);
+        m_currentFrame.reset();
+        m_lastValidFrame.reset();
     }
 
-    m_framePool.clear();
     m_opened = false;
-    LOG_INFO("FileSource: Closed.");
+    LOG_INFO("FileSource: Closed '{}'.", m_filePath);
 }
 
 void FileSource::play() {
@@ -63,18 +62,18 @@ void FileSource::pause() {
 std::shared_ptr<Frame> FileSource::getFrame() {
     if (!m_opened) return nullptr;
 
-    std::lock_guard<std::mutex> lock(m_queueMutex);
-    if (!m_frameQueue.empty()) {
-        m_lastFrame = m_frameQueue.front();
-        m_frameQueue.pop();
+    std::lock_guard<std::mutex> lock(m_frameMutex);
+    if (m_currentFrame) {
+        m_lastValidFrame = m_currentFrame;
     }
-    return m_lastFrame;
+    return m_lastValidFrame;
 }
 
 void FileSource::decodeWorkerLoop() {
     double fps = m_decoder.fps();
     if (fps <= 0.0) fps = 30.0;
     int frameDelayMs = static_cast<int>(1000.0 / fps);
+    if (frameDelayMs < 5) frameDelayMs = 5;
 
     while (m_running) {
         if (!m_playing) {
@@ -82,33 +81,22 @@ void FileSource::decodeWorkerLoop() {
             continue;
         }
 
-        bool queueFull = false;
-        {
-            std::lock_guard<std::mutex> lock(m_queueMutex);
-            if (m_frameQueue.size() >= MAX_QUEUE_SIZE) {
-                queueFull = true;
-            }
-        }
-
-        if (queueFull) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            continue;
-        }
-
         auto frame = m_framePool.acquire(m_decoder.width(), m_decoder.height(), PixelFormat::RGBA32);
         if (m_decoder.decodeNextFrame(*frame)) {
             {
-                std::lock_guard<std::mutex> lock(m_queueMutex);
-                m_frameQueue.push(frame);
+                std::lock_guard<std::mutex> lock(m_frameMutex);
+                m_currentFrame = frame;
+                m_lastValidFrame = frame;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(frameDelayMs));
         } else {
             // End of file
             if (m_loop) {
-                LOG_INFO("FileSource: End of file reached. Looping back to beginning.");
                 m_decoder.seekToBeginning();
+                std::this_thread::sleep_for(std::chrono::milliseconds(frameDelayMs));
             } else {
                 m_playing = false;
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
         }
     }

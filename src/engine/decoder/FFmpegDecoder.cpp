@@ -65,6 +65,9 @@ bool FFmpegDecoder::open(const std::string& filePath) {
         return false;
     }
 
+    m_codecContext->thread_count = 4;
+    m_codecContext->thread_type = FF_THREAD_FRAME;
+
     if (avcodec_open2(m_codecContext, codec, nullptr) < 0) {
         LOG_ERROR("FFmpeg: Failed to open codec.");
         close();
@@ -89,13 +92,56 @@ bool FFmpegDecoder::open(const std::string& filePath) {
 bool FFmpegDecoder::decodeNextFrame(Frame& outFrame) {
     if (!m_isOpen || !m_formatContext || !m_codecContext) return false;
 
-    while (av_read_frame(m_formatContext, m_avPacket) >= 0) {
-        if (m_avPacket->stream_index == m_videoStreamIndex) {
-            int ret = avcodec_send_packet(m_codecContext, m_avPacket);
+    while (m_isOpen) {
+        int ret = avcodec_receive_frame(m_codecContext, m_avFrame);
+        if (ret == 0) {
+            int frameW = m_avFrame->width > 0 ? m_avFrame->width : m_width;
+            int frameH = m_avFrame->height > 0 ? m_avFrame->height : m_height;
+            m_width = frameW;
+            m_height = frameH;
+
+            AVPixelFormat pixFmt = static_cast<AVPixelFormat>(m_avFrame->format);
+
+            m_swsContext = sws_getCachedContext(
+                m_swsContext,
+                frameW, frameH, pixFmt,
+                frameW, frameH, AV_PIX_FMT_RGBA,
+                SWS_BICUBIC | SWS_ACCURATE_RND, nullptr, nullptr, nullptr
+            );
+
+            if (!m_swsContext) return false;
+
+            if (outFrame.width() != frameW || outFrame.height() != frameH) {
+                outFrame.resize(frameW, frameH, PixelFormat::RGBA32);
+            }
+
+            uint8_t* dstData[4] = { outFrame.data(), nullptr, nullptr, nullptr };
+            int dstLinesize[4] = { outFrame.stride(), 0, 0, 0 };
+
+            sws_scale(
+                m_swsContext,
+                m_avFrame->data,
+                m_avFrame->linesize,
+                0,
+                frameH,
+                dstData,
+                dstLinesize
+            );
+
+            return true;
+        }
+
+        // Read next packet from container
+        if (av_read_frame(m_formatContext, m_avPacket) >= 0) {
+            if (m_avPacket->stream_index == m_videoStreamIndex) {
+                avcodec_send_packet(m_codecContext, m_avPacket);
+            }
             av_packet_unref(m_avPacket);
-
-            if (ret < 0) continue;
-
+        } else {
+            // EOF reached: send flush packet to decoder
+            avcodec_send_packet(m_codecContext, nullptr);
+            
+            // Try receiving flushed frames
             ret = avcodec_receive_frame(m_codecContext, m_avFrame);
             if (ret == 0) {
                 int frameW = m_avFrame->width > 0 ? m_avFrame->width : m_width;
@@ -133,8 +179,8 @@ bool FFmpegDecoder::decodeNextFrame(Frame& outFrame) {
 
                 return true;
             }
-        } else {
-            av_packet_unref(m_avPacket);
+
+            return false;
         }
     }
 

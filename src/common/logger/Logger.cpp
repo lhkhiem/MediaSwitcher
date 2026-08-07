@@ -7,11 +7,14 @@
 #pragma warning(pop)
 #include <vector>
 #include <iostream>
+#include <filesystem>
 
 std::shared_ptr<spdlog::logger> Logger::s_logger;
 
 void Logger::init() {
     try {
+        std::filesystem::create_directories("logs");
+
         // Console sink
         auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
         console_sink->set_level(spdlog::level::debug);
@@ -26,7 +29,8 @@ void Logger::init() {
 
         s_logger = std::make_shared<spdlog::logger>("MediaSwitcher", sinks.begin(), sinks.end());
         s_logger->set_level(spdlog::level::debug);
-        s_logger->flush_on(spdlog::level::info);
+        s_logger->flush_on(spdlog::level::trace);
+        spdlog::flush_every(std::chrono::seconds(1));
 
         spdlog::register_logger(s_logger);
         spdlog::set_default_logger(s_logger);

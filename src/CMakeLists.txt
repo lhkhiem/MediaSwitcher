@@ -20,6 +20,10 @@ set(SOURCES
     app/WorkspaceManager.h
     ui/MainWindow.cpp
     ui/MainWindow.h
+    ui/FullscreenLEDWindow.cpp
+    ui/FullscreenLEDWindow.h
+    ui/InputSlotWidget.cpp
+    ui/InputSlotWidget.h
     engine/renderer/DirectXWindow.cpp
     engine/renderer/DirectXWindow.h
     engine/renderer/Renderer.cpp
@@ -30,6 +34,9 @@ set(SOURCES
     engine/frame/FramePool.cpp
     engine/frame/FramePool.h
     engine/input/IMediaSource.h
+    engine/input/InputSlot.h
+    engine/input/InputManager.cpp
+    engine/input/InputManager.h
     engine/input/ColorBarsSource.cpp
     engine/input/ColorBarsSource.h
     engine/input/FileSource.cpp

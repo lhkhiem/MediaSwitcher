@@ -22,9 +22,14 @@ set(SOURCES
     engine/renderer/DirectXWindow.h
     engine/renderer/Renderer.cpp
     engine/renderer/Renderer.h
+    engine/renderer/Texture.cpp
     engine/renderer/Texture.h
     engine/frame/Frame.h
+    engine/frame/FramePool.cpp
+    engine/frame/FramePool.h
     engine/input/IMediaSource.h
+    engine/input/ColorBarsSource.cpp
+    engine/input/ColorBarsSource.h
 )
 
 # Qt UI Files (if any)

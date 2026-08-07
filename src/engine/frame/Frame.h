@@ -3,32 +3,52 @@
 #include <cstdint>
 #include <vector>
 
-// Immutable Frame structure
+enum class PixelFormat {
+    RGBA32 = 0,
+    BGRA32 = 1,
+    NV12   = 2
+};
+
+// Frame structure encapsulating pixel data
 class Frame {
 public:
-    Frame(int width, int height, int pixelFormat, int64_t timestamp)
+    Frame(int width, int height, PixelFormat format, int64_t timestamp = 0)
         : m_width(width)
         , m_height(height)
-        , m_pixelFormat(pixelFormat)
+        , m_pixelFormat(format)
         , m_timestamp(timestamp)
+        , m_stride(width * 4)
     {
+        m_data.resize(m_stride * height, 0);
     }
 
-    // No copy, no move semantics for now to keep it simple and safe
     Frame(const Frame&) = delete;
     Frame& operator=(const Frame&) = delete;
 
     int width() const { return m_width; }
     int height() const { return m_height; }
-    int pixelFormat() const { return m_pixelFormat; }
+    PixelFormat pixelFormat() const { return m_pixelFormat; }
     int64_t timestamp() const { return m_timestamp; }
+    int stride() const { return m_stride; }
 
-    // Placeholder for actual frame data (e.g., YUV/RGB buffers)
-    // For Milestone 2, we just need the structural representation.
+    uint8_t* data() { return m_data.data(); }
+    const uint8_t* data() const { return m_data.data(); }
+    size_t dataSize() const { return m_data.size(); }
+
+    void resize(int width, int height, PixelFormat format) {
+        m_width = width;
+        m_height = height;
+        m_pixelFormat = format;
+        m_stride = width * 4;
+        m_data.resize(m_stride * height);
+    }
 
 private:
     int m_width;
     int m_height;
-    int m_pixelFormat;
+    PixelFormat m_pixelFormat;
     int64_t m_timestamp;
+    int m_stride;
+    std::vector<uint8_t> m_data;
 };
+

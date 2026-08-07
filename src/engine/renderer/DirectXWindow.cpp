@@ -1,4 +1,5 @@
 #include "DirectXWindow.h"
+#include "engine/input/ColorBarsSource.h"
 #include "common/logger/Logger.h"
 
 #include <QEvent>
@@ -6,7 +7,6 @@
 DirectXWindow::DirectXWindow(QWidget *parent)
     : QWidget(parent)
 {
-    // Tell Qt we will handle rendering ourselves via native window
     setAttribute(Qt::WA_NativeWindow, true);
     setAttribute(Qt::WA_PaintOnScreen, true);
     setAttribute(Qt::WA_NoSystemBackground, true);
@@ -16,12 +16,18 @@ DirectXWindow::DirectXWindow(QWidget *parent)
 }
 
 DirectXWindow::~DirectXWindow() {
+    if (m_renderer) {
+        m_renderer->stop();
+    }
+    if (m_mediaSource) {
+        m_mediaSource->close();
+    }
     LOG_INFO("DirectXWindow destroyed.");
 }
 
 bool DirectXWindow::initDirectX() {
     DXGI_SWAP_CHAIN_DESC scd = {};
-    scd.BufferCount = 2; // Double buffering
+    scd.BufferCount = 2;
     scd.BufferDesc.Width = width();
     scd.BufferDesc.Height = height();
     scd.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -43,9 +49,9 @@ bool DirectXWindow::initDirectX() {
     D3D_FEATURE_LEVEL featureLevel;
 
     HRESULT hr = D3D11CreateDeviceAndSwapChain(
-        nullptr, // Default adapter
+        nullptr,
         D3D_DRIVER_TYPE_HARDWARE,
-        nullptr, // No software device
+        nullptr,
         createDeviceFlags,
         featureLevels,
         1,
@@ -62,7 +68,6 @@ bool DirectXWindow::initDirectX() {
         return false;
     }
 
-    // Get back buffer and create render target view
     Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
     hr = m_swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(backBuffer.GetAddressOf()));
     if (FAILED(hr)) {
@@ -78,31 +83,30 @@ bool DirectXWindow::initDirectX() {
 
     LOG_INFO("DirectX 11 initialized successfully.");
 
+    // Instantiate test ColorBarsSource
+    m_mediaSource = std::make_shared<ColorBarsSource>(1280, 720);
+    m_mediaSource->open();
+
     // Initialize and start renderer
     m_renderer = std::make_unique<Renderer>();
     m_renderer->initialize(m_d3dDevice, m_d3dContext, m_swapChain, m_renderTargetView);
+    m_renderer->setMediaSource(m_mediaSource);
     m_renderer->start();
 
     return true;
 }
 
 QPaintEngine* DirectXWindow::paintEngine() const {
-    // Return nullptr so Qt doesn't use its own paint engine on this widget
     return nullptr;
 }
 
 void DirectXWindow::paintEvent(QPaintEvent* event) {
     Q_UNUSED(event);
-    // Custom render loop will be called here or via a separate render thread
 }
 
 void DirectXWindow::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
-    
-    // Resize SwapChain if necessary
     if (m_swapChain && m_renderer) {
-        // Must stop renderer temporarily, release RTV, ResizeBuffers, and recreate RTV.
-        // For Milestone 2, we just let it be, but log it.
         LOG_INFO("DirectXWindow resized. SwapChain needs resize handling.");
     }
 }

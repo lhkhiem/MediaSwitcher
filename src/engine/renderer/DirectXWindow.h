@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include "Renderer.h"
+#include "engine/input/IMediaSource.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <memory>
@@ -27,4 +28,5 @@ private:
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_renderTargetView;
 
     std::unique_ptr<Renderer> m_renderer;
+    std::shared_ptr<IMediaSource> m_mediaSource;
 };

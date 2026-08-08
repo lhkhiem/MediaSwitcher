@@ -84,8 +84,15 @@ bool FFmpegDecoder::open(const std::string& filePath) {
         m_fps = 30.0;
     }
 
+    if (m_formatContext->duration != AV_NOPTS_VALUE) {
+        m_durationSeconds = static_cast<double>(m_formatContext->duration) / AV_TIME_BASE;
+    } else {
+        m_durationSeconds = 0.0;
+    }
+    m_currentPositionSeconds = 0.0;
+
     m_isOpen = true;
-    LOG_INFO("FFmpeg: Successfully opened '{}' ({}x{} @ {:.2f} fps)", filePath, m_width, m_height, m_fps);
+    LOG_INFO("FFmpeg: Successfully opened '{}' ({}x{} @ {:.2f} fps, duration: {:.2f}s)", filePath, m_width, m_height, m_fps, m_durationSeconds);
     return true;
 }
 
@@ -99,6 +106,13 @@ bool FFmpegDecoder::decodeNextFrame(Frame& outFrame) {
             int frameH = m_avFrame->height > 0 ? m_avFrame->height : m_height;
             m_width = frameW;
             m_height = frameH;
+
+            AVStream* stream = m_formatContext->streams[m_videoStreamIndex];
+            if (m_avFrame->pts != AV_NOPTS_VALUE) {
+                m_currentPositionSeconds = m_avFrame->pts * av_q2d(stream->time_base);
+            } else if (m_avFrame->pkt_dts != AV_NOPTS_VALUE) {
+                m_currentPositionSeconds = m_avFrame->pkt_dts * av_q2d(stream->time_base);
+            }
 
             AVPixelFormat pixFmt = static_cast<AVPixelFormat>(m_avFrame->format);
 
@@ -149,6 +163,11 @@ bool FFmpegDecoder::decodeNextFrame(Frame& outFrame) {
                 m_width = frameW;
                 m_height = frameH;
 
+                AVStream* stream = m_formatContext->streams[m_videoStreamIndex];
+                if (m_avFrame->pts != AV_NOPTS_VALUE) {
+                    m_currentPositionSeconds = m_avFrame->pts * av_q2d(stream->time_base);
+                }
+
                 AVPixelFormat pixFmt = static_cast<AVPixelFormat>(m_avFrame->format);
 
                 m_swsContext = sws_getCachedContext(
@@ -188,11 +207,19 @@ bool FFmpegDecoder::decodeNextFrame(Frame& outFrame) {
 }
 
 bool FFmpegDecoder::seekToBeginning() {
-    if (!m_isOpen || !m_formatContext) return false;
-    if (m_videoStreamIndex < 0) return false;
+    return seekToSeconds(0.0);
+}
 
-    av_seek_frame(m_formatContext, m_videoStreamIndex, 0, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY);
-    avcodec_flush_buffers(m_codecContext);
+bool FFmpegDecoder::seekToSeconds(double seconds) {
+    if (!m_isOpen || !m_formatContext || m_videoStreamIndex < 0) return false;
+
+    AVStream* stream = m_formatContext->streams[m_videoStreamIndex];
+    int64_t targetTimestamp = static_cast<int64_t>(seconds / av_q2d(stream->time_base));
+    av_seek_frame(m_formatContext, m_videoStreamIndex, targetTimestamp, AVSEEK_FLAG_BACKWARD);
+    if (m_codecContext) {
+        avcodec_flush_buffers(m_codecContext);
+    }
+    m_currentPositionSeconds = seconds;
     return true;
 }
 
@@ -210,5 +237,7 @@ void FFmpegDecoder::close() {
     }
     m_width = 0;
     m_height = 0;
+    m_durationSeconds = 0.0;
+    m_currentPositionSeconds = 0.0;
     m_videoStreamIndex = -1;
 }

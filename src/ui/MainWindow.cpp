@@ -40,6 +40,10 @@ MainWindow::MainWindow(QWidget *parent)
     // Initial update
     rebuildInputDock();
     updateViewports();
+
+    m_playbackTimer = new QTimer(this);
+    connect(m_playbackTimer, &QTimer::timeout, this, &MainWindow::updatePlaybackStatus);
+    m_playbackTimer->start(100);
 }
 
 MainWindow::~MainWindow() {
@@ -100,7 +104,7 @@ void MainWindow::setupUi() {
     QToolBar* toolbar = addToolBar("Main Toolbar");
     toolbar->setMovable(false);
 
-    QAction* addVideoAction = toolbar->addAction("📂 + Add Video Input");
+    QAction* addVideoAction = toolbar->addAction("📂 + Add Media Input(s)");
     connect(addVideoAction, &QAction::triggered, this, &MainWindow::onAddVideoInput);
 
     QAction* addColorBarsAction = toolbar->addAction("🎨 + Add Color Bars");
@@ -182,15 +186,160 @@ void MainWindow::setupUi() {
     pvwLayout->setContentsMargins(4, 16, 4, 4);
 
     m_pvwWindow = new DirectXWindow(pvwGroup);
-    pvwLayout->addWidget(m_pvwWindow);
+    pvwLayout->addWidget(m_pvwWindow, 1); // Expand video viewport to fill space
     m_pvwWindow->initDirectX();
+
+    // Broadcast Ultra-Compact vMix Control Bar for PREVIEW
+    QWidget* pvwBarWidget = new QWidget(pvwGroup);
+    pvwBarWidget->setStyleSheet(R"(
+        QWidget {
+            background-color: #0E0F14;
+            border-top: 1px solid #1E202C;
+            border-bottom-left-radius: 4px;
+            border-bottom-right-radius: 4px;
+        }
+    )");
+    QVBoxLayout* pvwBarLayout = new QVBoxLayout(pvwBarWidget);
+    pvwBarLayout->setContentsMargins(4, 2, 4, 2);
+    pvwBarLayout->setSpacing(2);
+
+    // Row 1: Time Display (Center) + Compact Action Buttons (Right)
+    QHBoxLayout* pvwRow1 = new QHBoxLayout();
+    pvwRow1->setContentsMargins(2, 0, 2, 0);
+    pvwRow1->setSpacing(4);
+
+    m_pvwTimeLabel = new QLabel("00:00:00 / 00:00:00", pvwBarWidget);
+    m_pvwTimeLabel->setStyleSheet("color: #FFFFFF; font-family: Consolas, 'Courier New', monospace; font-weight: bold; font-size: 11px;");
+    pvwRow1->addWidget(m_pvwTimeLabel);
+
+    pvwRow1->addStretch();
+
+    m_pvwLoopBtn = new QPushButton("Loop", pvwBarWidget);
+    m_pvwLoopBtn->setFixedSize(48, 20);
+    m_pvwLoopBtn->setCursor(Qt::PointingHandCursor);
+    m_pvwLoopBtn->setToolTip("Toggle Video Loop");
+    m_pvwLoopBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #388E3C;
+            color: #FFFFFF;
+            font-weight: bold;
+            font-size: 10px;
+            border: none;
+            border-radius: 3px;
+        }
+        QPushButton:hover { background-color: #4CAF50; }
+    )");
+    connect(m_pvwLoopBtn, &QPushButton::clicked, this, &MainWindow::onPvwLoopToggleClicked);
+    pvwRow1->addWidget(m_pvwLoopBtn);
+
+    m_pvwResetBtn = new QPushButton("Reset", pvwBarWidget);
+    m_pvwResetBtn->setFixedSize(48, 20);
+    m_pvwResetBtn->setCursor(Qt::PointingHandCursor);
+    m_pvwResetBtn->setToolTip("Reset to 00:00 (Pause)");
+    m_pvwResetBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #2B2D3A;
+            color: #DDDDDD;
+            font-weight: bold;
+            font-size: 10px;
+            border: 1px solid #3E4154;
+            border-radius: 3px;
+        }
+        QPushButton:hover {
+            background-color: #3E4154;
+            color: #FFFFFF;
+        }
+    )");
+    connect(m_pvwResetBtn, &QPushButton::clicked, this, &MainWindow::onPvwResetClicked);
+    pvwRow1->addWidget(m_pvwResetBtn);
+
+    m_pvwPlayPauseBtn = new QPushButton("▶", pvwBarWidget);
+    m_pvwPlayPauseBtn->setFixedSize(26, 20);
+    m_pvwPlayPauseBtn->setCursor(Qt::PointingHandCursor);
+    m_pvwPlayPauseBtn->setToolTip("Play/Pause");
+    m_pvwPlayPauseBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #2B2D3A;
+            color: #FFFFFF;
+            font-weight: bold;
+            font-size: 11px;
+            border: 1px solid #3E4154;
+            border-radius: 3px;
+        }
+        QPushButton:hover {
+            background-color: #00ACC1;
+        }
+    )");
+    connect(m_pvwPlayPauseBtn, &QPushButton::clicked, this, &MainWindow::onPvwPlayPauseClicked);
+    pvwRow1->addWidget(m_pvwPlayPauseBtn);
+
+    pvwBarLayout->addLayout(pvwRow1);
+
+    // Row 2: Sleek vMix-style Timeline Slider
+    m_pvwSeekSlider = new QSlider(Qt::Horizontal, pvwBarWidget);
+    m_pvwSeekSlider->setRange(0, 1000);
+    m_pvwSeekSlider->setValue(0);
+    m_pvwSeekSlider->setCursor(Qt::PointingHandCursor);
+    m_pvwSeekSlider->setFixedHeight(10);
+    m_pvwSeekSlider->setStyleSheet(R"(
+        QSlider::groove:horizontal {
+            height: 4px;
+            background: #1C1E2A;
+            border-radius: 2px;
+        }
+        QSlider::sub-page:horizontal {
+            background: #FF9800;
+            border-radius: 2px;
+        }
+        QSlider::handle:horizontal {
+            background: #FFFFFF;
+            border: 1px solid #FF9800;
+            width: 10px;
+            height: 10px;
+            margin-top: -3px;
+            margin-bottom: -3px;
+            border-radius: 5px;
+        }
+        QSlider::handle:horizontal:hover {
+            background: #FFE0B2;
+        }
+    )");
+    connect(m_pvwSeekSlider, &QSlider::sliderPressed, this, [this]() { m_isUserSeeking = true; });
+    connect(m_pvwSeekSlider, &QSlider::sliderReleased, this, [this]() {
+        m_isUserSeeking = false;
+        onPvwSeekSliderSliderMoved(m_pvwSeekSlider->value());
+    });
+    pvwBarLayout->addWidget(m_pvwSeekSlider);
+
+    pvwLayout->addWidget(pvwBarWidget);
 
     topLayout->addWidget(pvwGroup, 5);
 
     // 2. CENTER TRANSITION CONTROL PANEL
     QVBoxLayout* centerControlLayout = new QVBoxLayout();
     centerControlLayout->setAlignment(Qt::AlignCenter);
-    centerControlLayout->setSpacing(12);
+    centerControlLayout->setSpacing(10);
+
+    QPushButton* quickPlayBtn = new QPushButton("Quick Play", centralWidget);
+    quickPlayBtn->setFixedSize(90, 42);
+    quickPlayBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #00ACC1;
+            color: #FFFFFF;
+            font-weight: bold;
+            font-size: 14px;
+            border: none;
+            border-radius: 6px;
+        }
+        QPushButton:hover {
+            background-color: #26C6DA;
+        }
+        QPushButton:pressed {
+            background-color: #00838F;
+        }
+    )");
+    connect(quickPlayBtn, &QPushButton::clicked, this, &MainWindow::onQuickPlayClicked);
+    centerControlLayout->addWidget(quickPlayBtn);
 
     QPushButton* cutBtn = new QPushButton("CUT", centralWidget);
     cutBtn->setFixedSize(90, 48);
@@ -283,8 +432,132 @@ void MainWindow::setupUi() {
     pgmLayout->setContentsMargins(4, 16, 4, 4);
 
     m_pgmWindow = new DirectXWindow(pgmGroup);
-    pgmLayout->addWidget(m_pgmWindow);
+    pgmLayout->addWidget(m_pgmWindow, 1); // Expand video viewport to fill space
     m_pgmWindow->initDirectX();
+
+    // Broadcast Ultra-Compact vMix Control Bar for PROGRAM (PGM) - LIVE
+    QWidget* pgmBarWidget = new QWidget(pgmGroup);
+    pgmBarWidget->setStyleSheet(R"(
+        QWidget {
+            background-color: #0E0F14;
+            border-top: 1px solid #1E202C;
+            border-bottom-left-radius: 4px;
+            border-bottom-right-radius: 4px;
+        }
+    )");
+    QVBoxLayout* pgmBarLayout = new QVBoxLayout(pgmBarWidget);
+    pgmBarLayout->setContentsMargins(4, 2, 4, 2);
+    pgmBarLayout->setSpacing(2);
+
+    // Row 1: Time Display (Center) + Compact Action Buttons (Right)
+    QHBoxLayout* pgmRow1 = new QHBoxLayout();
+    pgmRow1->setContentsMargins(2, 0, 2, 0);
+    pgmRow1->setSpacing(4);
+
+    m_pgmTimeLabel = new QLabel("00:00:00 / 00:00:00", pgmBarWidget);
+    m_pgmTimeLabel->setStyleSheet("color: #FFFFFF; font-family: Consolas, 'Courier New', monospace; font-weight: bold; font-size: 11px;");
+    pgmRow1->addWidget(m_pgmTimeLabel);
+
+    pgmRow1->addStretch();
+
+    m_pgmLoopBtn = new QPushButton("Loop", pgmBarWidget);
+    m_pgmLoopBtn->setFixedSize(48, 20);
+    m_pgmLoopBtn->setCursor(Qt::PointingHandCursor);
+    m_pgmLoopBtn->setToolTip("Toggle Video Loop");
+    m_pgmLoopBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #388E3C;
+            color: #FFFFFF;
+            font-weight: bold;
+            font-size: 10px;
+            border: none;
+            border-radius: 3px;
+        }
+        QPushButton:hover { background-color: #4CAF50; }
+    )");
+    connect(m_pgmLoopBtn, &QPushButton::clicked, this, &MainWindow::onPgmLoopToggleClicked);
+    pgmRow1->addWidget(m_pgmLoopBtn);
+
+    m_pgmResetBtn = new QPushButton("Reset", pgmBarWidget);
+    m_pgmResetBtn->setFixedSize(48, 20);
+    m_pgmResetBtn->setCursor(Qt::PointingHandCursor);
+    m_pgmResetBtn->setToolTip("Reset to 00:00 (Pause)");
+    m_pgmResetBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #2B2D3A;
+            color: #DDDDDD;
+            font-weight: bold;
+            font-size: 10px;
+            border: 1px solid #3E4154;
+            border-radius: 3px;
+        }
+        QPushButton:hover {
+            background-color: #3E4154;
+            color: #FFFFFF;
+        }
+    )");
+    connect(m_pgmResetBtn, &QPushButton::clicked, this, &MainWindow::onPgmResetClicked);
+    pgmRow1->addWidget(m_pgmResetBtn);
+
+    m_pgmPlayPauseBtn = new QPushButton("▶", pgmBarWidget);
+    m_pgmPlayPauseBtn->setFixedSize(26, 20);
+    m_pgmPlayPauseBtn->setCursor(Qt::PointingHandCursor);
+    m_pgmPlayPauseBtn->setToolTip("Play/Pause");
+    m_pgmPlayPauseBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #2B2D3A;
+            color: #FFFFFF;
+            font-weight: bold;
+            font-size: 11px;
+            border: 1px solid #3E4154;
+            border-radius: 3px;
+        }
+        QPushButton:hover {
+            background-color: #E53935;
+        }
+    )");
+    connect(m_pgmPlayPauseBtn, &QPushButton::clicked, this, &MainWindow::onPgmPlayPauseClicked);
+    pgmRow1->addWidget(m_pgmPlayPauseBtn);
+
+    pgmBarLayout->addLayout(pgmRow1);
+
+    // Row 2: Sleek vMix-style Timeline Slider (Red PGM Track)
+    m_pgmSeekSlider = new QSlider(Qt::Horizontal, pgmBarWidget);
+    m_pgmSeekSlider->setRange(0, 1000);
+    m_pgmSeekSlider->setValue(0);
+    m_pgmSeekSlider->setCursor(Qt::PointingHandCursor);
+    m_pgmSeekSlider->setFixedHeight(10);
+    m_pgmSeekSlider->setStyleSheet(R"(
+        QSlider::groove:horizontal {
+            height: 4px;
+            background: #1C1E2A;
+            border-radius: 2px;
+        }
+        QSlider::sub-page:horizontal {
+            background: #E53935;
+            border-radius: 2px;
+        }
+        QSlider::handle:horizontal {
+            background: #FFFFFF;
+            border: 1px solid #E53935;
+            width: 10px;
+            height: 10px;
+            margin-top: -3px;
+            margin-bottom: -3px;
+            border-radius: 5px;
+        }
+        QSlider::handle:horizontal:hover {
+            background: #FFCDD2;
+        }
+    )");
+    connect(m_pgmSeekSlider, &QSlider::sliderPressed, this, [this]() { m_isPgmUserSeeking = true; });
+    connect(m_pgmSeekSlider, &QSlider::sliderReleased, this, [this]() {
+        m_isPgmUserSeeking = false;
+        onPgmSeekSliderSliderMoved(m_pgmSeekSlider->value());
+    });
+    pgmBarLayout->addWidget(m_pgmSeekSlider);
+
+    pgmLayout->addWidget(pgmBarWidget);
 
     topLayout->addWidget(pgmGroup, 5);
 
@@ -443,16 +716,36 @@ void MainWindow::rebuildInputDock() {
 }
 
 void MainWindow::onAddVideoInput() {
-    QString filter = "Video Files (*.mp4 *.mkv *.mov *.avi *.flv *.wmv *.webm);;All Files (*.*)";
-    QString filePath = QFileDialog::getOpenFileName(this, "Select Video File", "", filter);
+    QString filter = "Media Files (*.mp4 *.mkv *.mov *.avi *.flv *.wmv *.webm *.ts *.m4v *.mpg *.mpeg *.vob *.3gp *.m2ts *.mts *.png *.jpg *.jpeg *.bmp *.webp *.gif *.tiff);;"
+                     "Video Files (*.mp4 *.mkv *.mov *.avi *.flv *.wmv *.webm *.ts *.m4v *.mpg *.mpeg *.vob *.3gp *.m2ts *.mts);;"
+                     "Image Files (*.png *.jpg *.jpeg *.bmp *.webp *.gif *.tiff);;"
+                     "All Files (*.*)";
+    QStringList filePaths = QFileDialog::getOpenFileNames(this, "Select Media Files (Multi-Select)", "", filter);
 
-    if (filePath.isEmpty()) return;
+    if (filePaths.isEmpty()) return;
 
-    std::string utf8Path = filePath.toUtf8().toStdString();
-    int slotId = m_inputManager.addFileSlot(utf8Path);
-    if (slotId > 0) {
-        m_inputManager.setPreviewSlot(slotId);
-        statusBar()->showMessage(QString("Added Video Input #%1: %2").arg(slotId).arg(filePath));
+    int addedCount = 0;
+    int firstAddedSlotId = -1;
+    for (const QString& filePath : filePaths) {
+        if (filePath.isEmpty()) continue;
+        std::string utf8Path = filePath.toUtf8().toStdString();
+        int slotId = m_inputManager.addFileSlot(utf8Path);
+        if (slotId > 0) {
+            addedCount++;
+            if (firstAddedSlotId <= 0) {
+                firstAddedSlotId = slotId;
+            }
+        }
+    }
+
+    if (firstAddedSlotId > 0 && m_inputManager.previewSlotId() <= 0) {
+        m_inputManager.setPreviewSlot(firstAddedSlotId);
+    }
+
+    if (addedCount == 1) {
+        statusBar()->showMessage(QString("Added 1 Input: %1").arg(filePaths.first()));
+    } else if (addedCount > 1) {
+        statusBar()->showMessage(QString("Added %1 Inputs to Channel Grid").arg(addedCount));
     }
 }
 
@@ -462,6 +755,14 @@ void MainWindow::onAddColorBarsInput() {
         m_inputManager.setPreviewSlot(slotId);
         statusBar()->showMessage(QString("Added Color Bars Input #%1").arg(slotId));
     }
+}
+
+void MainWindow::onQuickPlayClicked() {
+    auto pvwSource = m_inputManager.previewSource();
+    if (pvwSource) {
+        pvwSource->play();
+    }
+    onCutClicked();
 }
 
 void MainWindow::onCutClicked() {
@@ -476,12 +777,26 @@ void MainWindow::onCutClicked() {
     auto pvwSource = m_inputManager.previewSource();
     auto pgmSource = m_inputManager.programSource();
 
-    if (m_pgmWindow && pgmSource && pvwSource) {
-        m_pgmWindow->renderer()->startTransition(pgmSource, pvwSource, 1.0f);
+    // Auto-play the Preview source from its current frame when transitioning to LIVE (PGM)
+    if (pvwSource) {
+        pvwSource->play();
     }
 
-    if (m_ledOutputWindow && m_ledOutputWindow->directXWindow() && pgmSource && pvwSource) {
-        m_ledOutputWindow->directXWindow()->renderer()->startTransition(pgmSource, pvwSource, 1.0f);
+    // Auto-pause the former LIVE (PGM) source when it transitions back to Preview (PVW)
+    if (pgmSource && pgmSource != pvwSource) {
+        pgmSource->pause();
+    }
+
+    if (m_pgmWindow && pvwSource) {
+        if (pgmSource) {
+            m_pgmWindow->renderer()->startTransition(pgmSource, pvwSource, 1.0f);
+        }
+    }
+
+    if (m_ledOutputWindow && m_ledOutputWindow->directXWindow() && pvwSource) {
+        if (pgmSource) {
+            m_ledOutputWindow->directXWindow()->renderer()->startTransition(pgmSource, pvwSource, 1.0f);
+        }
     }
 
     if (pgmId <= 0) {
@@ -508,12 +823,26 @@ void MainWindow::onFadeClicked() {
     auto pvwSource = m_inputManager.previewSource();
     auto pgmSource = m_inputManager.programSource();
 
-    if (m_pgmWindow && pgmSource && pvwSource) {
-        m_pgmWindow->renderer()->startTransition(pgmSource, pvwSource, duration);
+    // Auto-play the Preview source from its current frame when transitioning to LIVE (PGM)
+    if (pvwSource) {
+        pvwSource->play();
     }
 
-    if (m_ledOutputWindow && m_ledOutputWindow->directXWindow() && pgmSource && pvwSource) {
-        m_ledOutputWindow->directXWindow()->renderer()->startTransition(pgmSource, pvwSource, duration);
+    // Auto-pause the former LIVE (PGM) source when it transitions back to Preview (PVW)
+    if (pgmSource && pgmSource != pvwSource) {
+        pgmSource->pause();
+    }
+
+    if (m_pgmWindow && pvwSource) {
+        if (pgmSource) {
+            m_pgmWindow->renderer()->startTransition(pgmSource, pvwSource, duration);
+        }
+    }
+
+    if (m_ledOutputWindow && m_ledOutputWindow->directXWindow() && pvwSource) {
+        if (pgmSource) {
+            m_ledOutputWindow->directXWindow()->renderer()->startTransition(pgmSource, pvwSource, duration);
+        }
     }
 
     if (pgmId <= 0) {
@@ -524,4 +853,247 @@ void MainWindow::onFadeClicked() {
     }
 
     statusBar()->showMessage(QString("FADE Switch (%1 ms): Input #%2 is now LIVE").arg(duration).arg(pvwId));
+}
+
+void MainWindow::onPvwPlayPauseClicked() {
+    auto source = m_inputManager.previewSource();
+    if (!source) return;
+
+    if (source->isPlaying()) {
+        source->pause();
+    } else {
+        source->play();
+    }
+}
+
+void MainWindow::onPvwResetClicked() {
+    auto source = m_inputManager.previewSource();
+    if (source) {
+        source->seekToSeconds(0.0);
+        source->pause();
+    }
+}
+
+void MainWindow::onPvwLoopToggleClicked() {
+    auto source = m_inputManager.previewSource();
+    if (!source) return;
+
+    bool currentLoop = source->isLoop();
+    source->setLoop(!currentLoop);
+}
+
+void MainWindow::onPvwSeekSliderSliderMoved(int value) {
+    auto source = m_inputManager.previewSource();
+    if (!source) return;
+
+    double duration = source->durationSeconds();
+    if (duration > 0.0) {
+        double targetSec = (static_cast<double>(value) / 1000.0) * duration;
+        source->seekToSeconds(targetSec);
+    }
+}
+
+static QString formatTimeString(double seconds) {
+    if (seconds < 0.0) seconds = 0.0;
+    int totalSec = static_cast<int>(seconds);
+    int hrs = totalSec / 3600;
+    int mins = (totalSec % 3600) / 60;
+    int secs = totalSec % 60;
+
+    if (hrs > 0) {
+        return QString("%1:%2:%3")
+            .arg(hrs, 2, 10, QChar('0'))
+            .arg(mins, 2, 10, QChar('0'))
+            .arg(secs, 2, 10, QChar('0'));
+    } else {
+        return QString("%1:%2")
+            .arg(mins, 2, 10, QChar('0'))
+            .arg(secs, 2, 10, QChar('0'));
+    }
+}
+
+void MainWindow::onPgmPlayPauseClicked() {
+    auto source = m_inputManager.programSource();
+    if (!source) return;
+
+    if (source->isPlaying()) {
+        source->pause();
+    } else {
+        source->play();
+    }
+}
+
+void MainWindow::onPgmResetClicked() {
+    auto source = m_inputManager.programSource();
+    if (source) {
+        source->seekToSeconds(0.0);
+        source->pause();
+    }
+}
+
+void MainWindow::onPgmLoopToggleClicked() {
+    auto source = m_inputManager.programSource();
+    if (!source) return;
+
+    bool currentLoop = source->isLoop();
+    source->setLoop(!currentLoop);
+}
+
+void MainWindow::onPgmSeekSliderSliderMoved(int value) {
+    auto source = m_inputManager.programSource();
+    if (!source) return;
+
+    double duration = source->durationSeconds();
+    if (duration > 0.0) {
+        double targetSec = (static_cast<double>(value) / 1000.0) * duration;
+        source->seekToSeconds(targetSec);
+    }
+}
+
+void MainWindow::updatePlaybackStatus() {
+    // 1. PREVIEW (PVW) Status
+    auto pvwSource = m_inputManager.previewSource();
+    if (!pvwSource || pvwSource->durationSeconds() <= 0.0) {
+        m_pvwTimeLabel->setText("00:00:00 / 00:00:00");
+        m_pvwSeekSlider->setValue(0);
+    } else {
+        double pos = pvwSource->positionSeconds();
+        double dur = pvwSource->durationSeconds();
+
+        m_pvwTimeLabel->setText(QString("%1 / %2").arg(formatTimeString(pos)).arg(formatTimeString(dur)));
+
+        if (!m_isUserSeeking && dur > 0.0) {
+            int sliderVal = static_cast<int>((pos / dur) * 1000.0);
+            m_pvwSeekSlider->setValue(std::clamp(sliderVal, 0, 1000));
+        }
+
+        if (pvwSource->isPlaying()) {
+            m_pvwPlayPauseBtn->setText("⏸");
+            m_pvwPlayPauseBtn->setStyleSheet(R"(
+                QPushButton {
+                    background-color: #1976D2;
+                    color: #FFFFFF;
+                    font-weight: bold;
+                    font-size: 11px;
+                    border: none;
+                    border-radius: 3px;
+                }
+                QPushButton:hover { background-color: #2196F3; }
+            )");
+        } else {
+            m_pvwPlayPauseBtn->setText("▶");
+            m_pvwPlayPauseBtn->setStyleSheet(R"(
+                QPushButton {
+                    background-color: #2B2D3A;
+                    color: #FFFFFF;
+                    font-weight: bold;
+                    font-size: 11px;
+                    border: 1px solid #3E4154;
+                    border-radius: 3px;
+                }
+                QPushButton:hover { background-color: #00ACC1; }
+            )");
+        }
+
+        if (pvwSource->isLoop()) {
+            m_pvwLoopBtn->setText("Loop");
+            m_pvwLoopBtn->setStyleSheet(R"(
+                QPushButton {
+                    background-color: #388E3C;
+                    color: #FFFFFF;
+                    font-weight: bold;
+                    font-size: 10px;
+                    border: none;
+                    border-radius: 3px;
+                }
+                QPushButton:hover { background-color: #4CAF50; }
+            )");
+        } else {
+            m_pvwLoopBtn->setText("Loop");
+            m_pvwLoopBtn->setStyleSheet(R"(
+                QPushButton {
+                    background-color: #2B2D3A;
+                    color: #888888;
+                    font-weight: bold;
+                    font-size: 10px;
+                    border: 1px solid #3E4154;
+                    border-radius: 3px;
+                }
+                QPushButton:hover { background-color: #3E4154; color: #FFFFFF; }
+            )");
+        }
+    }
+
+    // 2. PROGRAM (LIVE / PGM) Status
+    auto pgmSource = m_inputManager.programSource();
+    if (!pgmSource || pgmSource->durationSeconds() <= 0.0) {
+        m_pgmTimeLabel->setText("00:00:00 / 00:00:00");
+        m_pgmSeekSlider->setValue(0);
+    } else {
+        double pos = pgmSource->positionSeconds();
+        double dur = pgmSource->durationSeconds();
+
+        m_pgmTimeLabel->setText(QString("%1 / %2").arg(formatTimeString(pos)).arg(formatTimeString(dur)));
+
+        if (!m_isPgmUserSeeking && dur > 0.0) {
+            int sliderVal = static_cast<int>((pos / dur) * 1000.0);
+            m_pgmSeekSlider->setValue(std::clamp(sliderVal, 0, 1000));
+        }
+
+        if (pgmSource->isPlaying()) {
+            m_pgmPlayPauseBtn->setText("⏸");
+            m_pgmPlayPauseBtn->setStyleSheet(R"(
+                QPushButton {
+                    background-color: #E53935;
+                    color: #FFFFFF;
+                    font-weight: bold;
+                    font-size: 11px;
+                    border: none;
+                    border-radius: 3px;
+                }
+                QPushButton:hover { background-color: #EF5350; }
+            )");
+        } else {
+            m_pgmPlayPauseBtn->setText("▶");
+            m_pgmPlayPauseBtn->setStyleSheet(R"(
+                QPushButton {
+                    background-color: #2B2D3A;
+                    color: #FFFFFF;
+                    font-weight: bold;
+                    font-size: 11px;
+                    border: 1px solid #3E4154;
+                    border-radius: 3px;
+                }
+                QPushButton:hover { background-color: #E53935; }
+            )");
+        }
+
+        if (pgmSource->isLoop()) {
+            m_pgmLoopBtn->setText("Loop");
+            m_pgmLoopBtn->setStyleSheet(R"(
+                QPushButton {
+                    background-color: #388E3C;
+                    color: #FFFFFF;
+                    font-weight: bold;
+                    font-size: 10px;
+                    border: none;
+                    border-radius: 3px;
+                }
+                QPushButton:hover { background-color: #4CAF50; }
+            )");
+        } else {
+            m_pgmLoopBtn->setText("Loop");
+            m_pgmLoopBtn->setStyleSheet(R"(
+                QPushButton {
+                    background-color: #2B2D3A;
+                    color: #888888;
+                    font-weight: bold;
+                    font-size: 10px;
+                    border: 1px solid #3E4154;
+                    border-radius: 3px;
+                }
+                QPushButton:hover { background-color: #3E4154; color: #FFFFFF; }
+            )");
+        }
+    }
 }

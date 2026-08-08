@@ -18,12 +18,16 @@ public:
 
     std::shared_ptr<Frame> getFrame() override;
 
-    void setLoop(bool loop) { m_loop = loop; }
-    bool isLoop() const { return m_loop; }
+    double durationSeconds() const override;
+    double positionSeconds() const override;
+    void seekToSeconds(double seconds) override;
 
-    void play();
-    void pause();
-    bool isPlaying() const { return m_playing; }
+    void setLoop(bool loop) override { m_loop = loop; }
+    bool isLoop() const override { return m_loop; }
+
+    void play() override;
+    void pause() override;
+    bool isPlaying() const override { return m_playing; }
 
     const std::string& filePath() const { return m_filePath; }
 
@@ -34,6 +38,7 @@ private:
     std::atomic<bool> m_opened{false};
     std::atomic<bool> m_playing{false};
     std::atomic<bool> m_loop{true};
+    std::atomic<double> m_seekTarget{-1.0};
 
     FFmpegDecoder m_decoder;
     FramePool m_framePool;

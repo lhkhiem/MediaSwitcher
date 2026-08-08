@@ -14,6 +14,9 @@
 
 #include <QCloseEvent>
 
+#include <QSlider>
+#include <QTimer>
+
 class DirectXWindow;
 
 class MainWindow : public QMainWindow {
@@ -29,11 +32,21 @@ protected:
 private slots:
     void onAddVideoInput();
     void onAddColorBarsInput();
+    void onQuickPlayClicked();
     void onCutClicked();
     void onFadeClicked();
     void onToggleFullscreenLED();
     void rebuildInputDock();
     void updateViewports();
+    void onPvwPlayPauseClicked();
+    void onPvwResetClicked();
+    void onPvwLoopToggleClicked();
+    void onPvwSeekSliderSliderMoved(int value);
+    void onPgmPlayPauseClicked();
+    void onPgmResetClicked();
+    void onPgmLoopToggleClicked();
+    void onPgmSeekSliderSliderMoved(int value);
+    void updatePlaybackStatus();
 
 private:
     void setupUi();
@@ -50,4 +63,20 @@ private:
     QComboBox* m_fadeDurationCombo{nullptr};
     QComboBox* m_screenSelectorCombo{nullptr};
     QPushButton* m_fullscreenToggleBtn{nullptr};
+
+    QPushButton* m_pvwPlayPauseBtn{nullptr};
+    QPushButton* m_pvwResetBtn{nullptr};
+    QPushButton* m_pvwLoopBtn{nullptr};
+    QSlider* m_pvwSeekSlider{nullptr};
+    QLabel* m_pvwTimeLabel{nullptr};
+    bool m_isUserSeeking{false};
+
+    QPushButton* m_pgmPlayPauseBtn{nullptr};
+    QPushButton* m_pgmResetBtn{nullptr};
+    QPushButton* m_pgmLoopBtn{nullptr};
+    QSlider* m_pgmSeekSlider{nullptr};
+    QLabel* m_pgmTimeLabel{nullptr};
+    bool m_isPgmUserSeeking{false};
+
+    QTimer* m_playbackTimer{nullptr};
 };

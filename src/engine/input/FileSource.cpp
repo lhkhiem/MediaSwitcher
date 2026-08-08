@@ -22,11 +22,11 @@ bool FileSource::open() {
     }
 
     m_opened = true;
-    m_playing = true;
+    m_playing = false; // Start paused at frame 0 (vMix standard)
     m_running = true;
     m_workerThread = std::thread(&FileSource::decodeWorkerLoop, this);
 
-    LOG_INFO("FileSource: Opened '{}' with worker thread.", m_filePath);
+    LOG_INFO("FileSource: Opened '{}' paused at frame 0.", m_filePath);
     return true;
 }
 
@@ -59,6 +59,19 @@ void FileSource::pause() {
     m_playing = false;
 }
 
+double FileSource::durationSeconds() const {
+    return m_decoder.durationSeconds();
+}
+
+double FileSource::positionSeconds() const {
+    return m_decoder.currentPositionSeconds();
+}
+
+void FileSource::seekToSeconds(double seconds) {
+    if (seconds < 0.0) seconds = 0.0;
+    m_seekTarget.store(seconds);
+}
+
 std::shared_ptr<Frame> FileSource::getFrame() {
     if (!m_opened) return nullptr;
 
@@ -76,7 +89,32 @@ void FileSource::decodeWorkerLoop() {
     if (frameDelayMs < 5) frameDelayMs = 5;
 
     while (m_running) {
+        double seekSec = m_seekTarget.exchange(-1.0);
+        if (seekSec >= 0.0) {
+            m_decoder.seekToSeconds(seekSec);
+            auto frame = m_framePool.acquire(m_decoder.width(), m_decoder.height(), PixelFormat::RGBA32);
+            if (m_decoder.decodeNextFrame(*frame)) {
+                std::lock_guard<std::mutex> lock(m_frameMutex);
+                m_currentFrame = frame;
+                m_lastValidFrame = frame;
+            }
+        }
+
         if (!m_playing) {
+            // Decode initial frame 0 once if not decoded yet
+            bool hasFrame = false;
+            {
+                std::lock_guard<std::mutex> lock(m_frameMutex);
+                hasFrame = (m_currentFrame != nullptr);
+            }
+            if (!hasFrame) {
+                auto frame = m_framePool.acquire(m_decoder.width(), m_decoder.height(), PixelFormat::RGBA32);
+                if (m_decoder.decodeNextFrame(*frame)) {
+                    std::lock_guard<std::mutex> lock(m_frameMutex);
+                    m_currentFrame = frame;
+                    m_lastValidFrame = frame;
+                }
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
             continue;
         }

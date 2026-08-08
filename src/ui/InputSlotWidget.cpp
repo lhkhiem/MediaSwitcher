@@ -44,7 +44,9 @@ void InputSlotWidget::paintEvent(QPaintEvent *event) {
 
     // 3. Draw Badge Text Overlay
     QString badge = "";
-    if (m_isPgm) {
+    if (m_isPgm && m_isPvw) {
+        badge = " [PVW/PGM]";
+    } else if (m_isPgm) {
         badge = " [PGM]";
     } else if (m_isPvw) {
         badge = " [PVW]";
@@ -63,7 +65,10 @@ void InputSlotWidget::paintEvent(QPaintEvent *event) {
 
     // 4. Draw vMix Border
     QPen pen;
-    if (m_isPgm) {
+    if (m_isPgm && m_isPvw) {
+        pen.setColor(QColor(255, 110, 0)); // Intense Amber-Red for PVW+PGM
+        pen.setWidth(3);
+    } else if (m_isPgm) {
         pen.setColor(QColor(229, 57, 53)); // Red for PGM
         pen.setWidth(3);
     } else if (m_isPvw) {

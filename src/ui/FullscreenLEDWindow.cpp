@@ -8,6 +8,7 @@ FullscreenLEDWindow::FullscreenLEDWindow(QWidget *parent)
     : QWidget(parent, Qt::Window | Qt::FramelessWindowHint)
 {
     setAttribute(Qt::WA_DeleteOnClose, false);
+    setAttribute(Qt::WA_QuitOnClose, false);
 
     QVBoxLayout* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -65,4 +66,9 @@ void FullscreenLEDWindow::keyPressEvent(QKeyEvent *event) {
     } else {
         QWidget::keyPressEvent(event);
     }
+}
+
+void FullscreenLEDWindow::closeEvent(QCloseEvent *event) {
+    emit windowClosed();
+    QWidget::closeEvent(event);
 }

@@ -37,12 +37,10 @@ int InputManager::addColorBarsSlot(const std::string& name) {
     m_slots.push_back(slot);
     int newId = slot.id;
 
-    if (m_previewSlotId == -1) m_previewSlotId = newId;
-    if (m_programSlotId == -1) m_programSlotId = newId;
+    m_previewSlotId = newId;
 
     if (m_onInputListChanged) m_onInputListChanged();
     if (m_onPreviewChanged) m_onPreviewChanged();
-    if (m_onProgramChanged) m_onProgramChanged();
     return newId;
 }
 
@@ -92,14 +90,12 @@ int InputManager::addFileSlot(const std::string& filePath, const std::string& na
     m_slots.push_back(slot);
     int newId = slot.id;
 
-    if (m_previewSlotId == -1) m_previewSlotId = newId;
-    if (m_programSlotId == -1) m_programSlotId = newId;
+    m_previewSlotId = newId;
 
     LOG_INFO("InputManager: Added video slot #{} '{}'", newId, slot.name);
 
     if (m_onInputListChanged) m_onInputListChanged();
     if (m_onPreviewChanged) m_onPreviewChanged();
-    if (m_onProgramChanged) m_onProgramChanged();
     return newId;
 }
 

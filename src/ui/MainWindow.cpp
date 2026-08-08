@@ -18,17 +18,23 @@ MainWindow::MainWindow(QWidget *parent)
     setupUi();
 
     m_inputManager.setOnInputListChanged([this]() {
-        QMetaObject::invokeMethod(this, "rebuildInputDock", Qt::QueuedConnection);
+        QMetaObject::invokeMethod(this, [this]() {
+            rebuildInputDock();
+        }, Qt::QueuedConnection);
     });
 
     m_inputManager.setOnPreviewChanged([this]() {
-        QMetaObject::invokeMethod(this, "updateViewports", Qt::QueuedConnection);
-        QMetaObject::invokeMethod(this, "rebuildInputDock", Qt::QueuedConnection);
+        QMetaObject::invokeMethod(this, [this]() {
+            updateViewports();
+            rebuildInputDock();
+        }, Qt::QueuedConnection);
     });
 
     m_inputManager.setOnProgramChanged([this]() {
-        QMetaObject::invokeMethod(this, "updateViewports", Qt::QueuedConnection);
-        QMetaObject::invokeMethod(this, "rebuildInputDock", Qt::QueuedConnection);
+        QMetaObject::invokeMethod(this, [this]() {
+            updateViewports();
+            rebuildInputDock();
+        }, Qt::QueuedConnection);
     });
 
     // Initial update
@@ -40,8 +46,20 @@ MainWindow::~MainWindow() {
     if (m_ledOutputWindow) {
         m_ledOutputWindow->close();
         delete m_ledOutputWindow;
+        m_ledOutputWindow = nullptr;
     }
     LOG_INFO("MainWindow destroyed.");
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    if (m_ledOutputWindow) {
+        m_ledOutputWindow->close();
+        delete m_ledOutputWindow;
+        m_ledOutputWindow = nullptr;
+    }
+    LOG_INFO("MainWindow closeEvent triggered. Exiting application.");
+    QApplication::quit();
+    event->accept();
 }
 
 void MainWindow::setupUi() {
@@ -360,21 +378,36 @@ void MainWindow::onToggleFullscreenLED() {
         const auto screens = QGuiApplication::screens();
         QScreen* targetScreen = (screenIdx >= 0 && screenIdx < screens.size()) ? screens.at(screenIdx) : QGuiApplication::primaryScreen();
 
-        if (!m_ledOutputWindow) {
-            m_ledOutputWindow = new FullscreenLEDWindow();
+        if (m_ledOutputWindow) {
+            m_ledOutputWindow->close();
+            delete m_ledOutputWindow;
+            m_ledOutputWindow = nullptr;
         }
+
+        m_ledOutputWindow = new FullscreenLEDWindow();
+        connect(m_ledOutputWindow, &FullscreenLEDWindow::windowClosed, this, [this]() {
+            if (m_fullscreenToggleBtn) {
+                m_fullscreenToggleBtn->setChecked(false);
+                m_fullscreenToggleBtn->setText("🖥 FULLSCREEN LED OUTPUT (OFF)");
+                statusBar()->showMessage("Fullscreen LED Output closed.");
+            }
+        });
 
         if (m_ledOutputWindow->initOutput(targetScreen)) {
             m_ledOutputWindow->setMediaSource(m_inputManager.programSource());
             m_fullscreenToggleBtn->setText("🖥 FULLSCREEN LED OUTPUT (ON)");
             statusBar()->showMessage(QString("Fullscreen LED Output ACTIVE on Display: %1").arg(m_screenSelectorCombo->currentText()));
         } else {
+            delete m_ledOutputWindow;
+            m_ledOutputWindow = nullptr;
             m_fullscreenToggleBtn->setChecked(false);
             m_fullscreenToggleBtn->setText("🖥 FULLSCREEN LED OUTPUT (OFF)");
         }
     } else {
         if (m_ledOutputWindow) {
             m_ledOutputWindow->close();
+            delete m_ledOutputWindow;
+            m_ledOutputWindow = nullptr;
         }
         m_fullscreenToggleBtn->setText("🖥 FULLSCREEN LED OUTPUT (OFF)");
         statusBar()->showMessage("Fullscreen LED Output closed.");
@@ -435,6 +468,7 @@ void MainWindow::onCutClicked() {
     int pvwId = m_inputManager.previewSlotId();
     int pgmId = m_inputManager.programSlotId();
 
+    if (pvwId <= 0) return;
     if (pvwId == pgmId) return;
 
     LOG_INFO("CUT triggered: PVW #{} <-> PGM #{}", pvwId, pgmId);
@@ -450,7 +484,11 @@ void MainWindow::onCutClicked() {
         m_ledOutputWindow->directXWindow()->renderer()->startTransition(pgmSource, pvwSource, 1.0f);
     }
 
-    m_inputManager.swapPreviewAndProgram();
+    if (pgmId <= 0) {
+        m_inputManager.setProgramSlot(pvwId);
+    } else {
+        m_inputManager.swapPreviewAndProgram();
+    }
 
     statusBar()->showMessage(QString("CUT Switch: Input #%1 is now LIVE").arg(pvwId));
 }
@@ -459,6 +497,7 @@ void MainWindow::onFadeClicked() {
     int pvwId = m_inputManager.previewSlotId();
     int pgmId = m_inputManager.programSlotId();
 
+    if (pvwId <= 0) return;
     if (pvwId == pgmId) return;
 
     float duration = m_fadeDurationCombo->currentData().toFloat();
@@ -477,8 +516,12 @@ void MainWindow::onFadeClicked() {
         m_ledOutputWindow->directXWindow()->renderer()->startTransition(pgmSource, pvwSource, duration);
     }
 
-    m_inputManager.setProgramSlot(pvwId);
-    m_inputManager.setPreviewSlot(pgmId);
+    if (pgmId <= 0) {
+        m_inputManager.setProgramSlot(pvwId);
+    } else {
+        m_inputManager.setProgramSlot(pvwId);
+        m_inputManager.setPreviewSlot(pgmId);
+    }
 
     statusBar()->showMessage(QString("FADE Switch (%1 ms): Input #%2 is now LIVE").arg(duration).arg(pvwId));
 }

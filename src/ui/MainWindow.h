@@ -12,6 +12,8 @@
 #include "InputSlotWidget.h"
 #include <memory>
 
+#include <QCloseEvent>
+
 class DirectXWindow;
 
 class MainWindow : public QMainWindow {
@@ -21,6 +23,9 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
 
+protected:
+    void closeEvent(QCloseEvent *event) override;
+
 private slots:
     void onAddVideoInput();
     void onAddColorBarsInput();
@@ -28,10 +33,10 @@ private slots:
     void onFadeClicked();
     void onToggleFullscreenLED();
     void rebuildInputDock();
+    void updateViewports();
 
 private:
     void setupUi();
-    void updateViewports();
     void populateScreenSelector();
 
     DirectXWindow* m_pvwWindow{nullptr};

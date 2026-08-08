@@ -20,9 +20,6 @@ DirectXWindow::~DirectXWindow() {
     if (m_renderer) {
         m_renderer->stop();
     }
-    if (m_mediaSource) {
-        m_mediaSource->close();
-    }
     LOG_INFO("DirectXWindow destroyed.");
 }
 

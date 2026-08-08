@@ -4,10 +4,13 @@
 #include "ui/InputSlotWidget.h"
 #include "ui/GlobalPlaylistDialog.h"
 #include "ui/AudioMeterWidget.h"
+#include "ui/AboutDialog.h"
+#include "common/config/AppInfo.h"
 #include "engine/input/GlobalPlaylistController.h"
 #include "engine/audio/AudioEngine.h"
 #include "common/logger/Logger.h"
 
+#include <QMenuBar>
 #include <QToolBar>
 #include <QFileDialog>
 #include <QStatusBar>
@@ -85,6 +88,29 @@ void MainWindow::setupUi() {
         QMainWindow {
             background-color: #121318;
         }
+        QMenuBar {
+            background-color: #161720;
+            color: #D0D0D0;
+            border-bottom: 1px solid #252633;
+            font-weight: bold;
+        }
+        QMenuBar::item {
+            padding: 4px 10px;
+            background: transparent;
+        }
+        QMenuBar::item:selected {
+            background-color: #2B2D3A;
+            color: #00E5FF;
+        }
+        QMenu {
+            background-color: #1E1F28;
+            color: #E0E0E0;
+            border: 1px solid #3E4154;
+        }
+        QMenu::item:selected {
+            background-color: #00ACC1;
+            color: #FFFFFF;
+        }
         QToolBar {
             background-color: #1E1F28;
             border-bottom: 1px solid #2B2D3A;
@@ -109,6 +135,13 @@ void MainWindow::setupUi() {
             border-top: 1px solid #252633;
         }
     )");
+
+    // Menu Bar
+    QMenuBar* menuBar = this->menuBar();
+    QMenu* helpMenu = menuBar->addMenu("Trợ giúp (&H)");
+    QAction* aboutAction = helpMenu->addAction("ℹ️ Về MediaSwitcher & Bản quyền...");
+    aboutAction->setShortcut(QKeySequence(Qt::Key_F1));
+    connect(aboutAction, &QAction::triggered, this, &MainWindow::onShowAboutDialog);
 
     // Toolbar
     QToolBar* toolbar = addToolBar("Main Toolbar");
@@ -154,6 +187,11 @@ void MainWindow::setupUi() {
     )");
     connect(m_fullscreenToggleBtn, &QPushButton::clicked, this, &MainWindow::onToggleFullscreenLED);
     toolbar->addWidget(m_fullscreenToggleBtn);
+
+    toolbar->addSeparator();
+
+    QAction* aboutToolAction = toolbar->addAction("ℹ️ Bản quyền & Tác giả");
+    connect(aboutToolAction, &QAction::triggered, this, &MainWindow::onShowAboutDialog);
 
     // Central Widget
     QWidget* centralWidget = new QWidget(this);
@@ -940,6 +978,26 @@ void MainWindow::setupUi() {
     mainLayout->addWidget(dockGroup, 4);
 
     statusBar()->showMessage("MediaSwitcher LED Engine Ready. Dual Viewports Live.");
+
+    QPushButton* copyrightBtn = new QPushButton(QString("© %1").arg(AppInfo::COPYRIGHT), this);
+    copyrightBtn->setFlat(true);
+    copyrightBtn->setCursor(Qt::PointingHandCursor);
+    copyrightBtn->setToolTip("Click để xem chi tiết thông tin Tác giả & Bản quyền phần mềm");
+    copyrightBtn->setStyleSheet(R"(
+        QPushButton {
+            color: #81C784;
+            font-weight: bold;
+            font-size: 11px;
+            border: none;
+            padding: 2px 8px;
+        }
+        QPushButton:hover {
+            color: #00E5FF;
+            text-decoration: underline;
+        }
+    )");
+    connect(copyrightBtn, &QPushButton::clicked, this, &MainWindow::onShowAboutDialog);
+    statusBar()->addPermanentWidget(copyrightBtn);
 }
 
 void MainWindow::populateScreenSelector() {
@@ -1841,4 +1899,9 @@ void MainWindow::onMuteToggled() {
             QPushButton:hover { background-color: #4CAF50; }
         )");
     }
+}
+
+void MainWindow::onShowAboutDialog() {
+    AboutDialog dlg(this);
+    dlg.exec();
 }

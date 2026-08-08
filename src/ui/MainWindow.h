@@ -65,6 +65,8 @@ private slots:
     void onMasterVolumeChanged(int value);
     void onMuteToggled();
 
+    void onShowAboutDialog();
+
 private:
     void setupUi();
     void populateScreenSelector();

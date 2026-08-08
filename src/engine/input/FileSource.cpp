@@ -153,6 +153,10 @@ void FileSource::decodeWorkerLoop() {
             bool needMoreAudio = false;
             {
                 std::lock_guard<std::mutex> lock(m_audioMutex);
+                // If audio buffer built up while running in Preview without PGM drain, flush stale audio!
+                if (m_audioBuffer.size() > 96000) {
+                    m_audioBuffer.clear();
+                }
                 needMoreAudio = (m_audioBuffer.size() < 48000); // 0.5s max buffer
             }
 

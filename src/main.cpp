@@ -1,4 +1,5 @@
 #include "common/logger/Logger.h"
+#include "common/config/AppInfo.h"
 #include "app/WorkspaceManager.h"
 #include "ui/MainWindow.h"
 
@@ -19,6 +20,9 @@ int main(int argc, char *argv[]) {
 
     // 3. Initialize Qt Application
     QApplication app(argc, argv);
+    QCoreApplication::setOrganizationName(AppInfo::COMPANY);
+    QCoreApplication::setApplicationName(AppInfo::NAME);
+    QCoreApplication::setApplicationVersion(AppInfo::VERSION);
 
     // 4. Create and Show Main Window
     MainWindow mainWindow;

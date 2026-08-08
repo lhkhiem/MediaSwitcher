@@ -35,6 +35,13 @@ public:
                          std::shared_ptr<IMediaSource> toSource, 
                          float durationMs);
 
+    void setFTB(bool active, float durationMs = 500.0f);
+    bool isFTB() const { return m_ftbActive; }
+
+    void setManualTransition(std::shared_ptr<IMediaSource> fromSource,
+                            std::shared_ptr<IMediaSource> toSource,
+                            float progress);
+
     void releaseRenderTargetView();
 
     void start();
@@ -72,6 +79,14 @@ private:
     bool m_isTransitioning{false};
     float m_transitionDurationMs{500.0f};
     std::chrono::steady_clock::time_point m_transitionStartTime;
+
+    bool m_ftbActive{false};
+    float m_ftbCurrentAlpha{0.0f};
+    float m_ftbDurationMs{500.0f};
+    std::chrono::steady_clock::time_point m_ftbStartTime;
+
+    bool m_isManualTransition{false};
+    float m_manualProgress{0.0f};
 
     std::thread m_renderThread;
     std::atomic<bool> m_running{false};

@@ -19,9 +19,11 @@ public:
     ~InputSlotWidget() override = default;
 
     int slotId() const { return m_slotId; }
+    void setCardSize(int w, int h);
 
 signals:
     void clicked(int slotId);
+    void removeRequested(int slotId);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -36,4 +38,5 @@ private:
     bool m_isPgm{false};
     QTimer* m_refreshTimer{nullptr};
     QPushButton* m_playBtn{nullptr};
+    QPushButton* m_closeBtn{nullptr};
 };

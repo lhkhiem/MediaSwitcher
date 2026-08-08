@@ -1,5 +1,9 @@
 #include "MainWindow.h"
 #include "engine/renderer/DirectXWindow.h"
+#include "ui/FullscreenLEDWindow.h"
+#include "ui/InputSlotWidget.h"
+#include "ui/PlaylistDialog.h"
+#include "engine/input/PlaylistSource.h"
 #include "common/logger/Logger.h"
 
 #include <QToolBar>
@@ -104,11 +108,11 @@ void MainWindow::setupUi() {
     QToolBar* toolbar = addToolBar("Main Toolbar");
     toolbar->setMovable(false);
 
-    QAction* addVideoAction = toolbar->addAction("📂 + Add Media Input(s)");
+    QAction* addVideoAction = toolbar->addAction("📂 + Add Input(s)");
     connect(addVideoAction, &QAction::triggered, this, &MainWindow::onAddVideoInput);
 
-    QAction* addColorBarsAction = toolbar->addAction("🎨 + Add Color Bars");
-    connect(addColorBarsAction, &QAction::triggered, this, &MainWindow::onAddColorBarsInput);
+    QAction* addPlaylistAction = toolbar->addAction("📋 + Add Playlist");
+    connect(addPlaylistAction, &QAction::triggered, this, &MainWindow::onAddPlaylistInput);
 
     toolbar->addSeparator();
 
@@ -318,16 +322,38 @@ void MainWindow::setupUi() {
     // 2. CENTER TRANSITION CONTROL PANEL
     QVBoxLayout* centerControlLayout = new QVBoxLayout();
     centerControlLayout->setAlignment(Qt::AlignCenter);
-    centerControlLayout->setSpacing(10);
+    centerControlLayout->setSpacing(8);
+
+    // FTB Emergency Button (vMix Fade To Black)
+    m_ftbBtn = new QPushButton("FTB", centralWidget);
+    m_ftbBtn->setFixedSize(90, 36);
+    m_ftbBtn->setToolTip("FTB - Fade To Black (F12)");
+    m_ftbBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #212121;
+            color: #E53935;
+            font-weight: bold;
+            font-size: 14px;
+            border: 2px solid #B71C1C;
+            border-radius: 6px;
+        }
+        QPushButton:hover {
+            background-color: #B71C1C;
+            color: #FFFFFF;
+        }
+    )");
+    connect(m_ftbBtn, &QPushButton::clicked, this, &MainWindow::onFTBClicked);
+    centerControlLayout->addWidget(m_ftbBtn);
 
     QPushButton* quickPlayBtn = new QPushButton("Quick Play", centralWidget);
-    quickPlayBtn->setFixedSize(90, 42);
+    quickPlayBtn->setFixedSize(90, 38);
+    quickPlayBtn->setToolTip("Play Preview & CUT Live (Space)");
     quickPlayBtn->setStyleSheet(R"(
         QPushButton {
             background-color: #00ACC1;
             color: #FFFFFF;
             font-weight: bold;
-            font-size: 14px;
+            font-size: 13px;
             border: none;
             border-radius: 6px;
         }
@@ -342,7 +368,8 @@ void MainWindow::setupUi() {
     centerControlLayout->addWidget(quickPlayBtn);
 
     QPushButton* cutBtn = new QPushButton("CUT", centralWidget);
-    cutBtn->setFixedSize(90, 48);
+    cutBtn->setFixedSize(90, 44);
+    cutBtn->setToolTip("CUT Transition (Enter)");
     cutBtn->setStyleSheet(R"(
         QPushButton {
             background-color: #4CAF50;
@@ -363,7 +390,8 @@ void MainWindow::setupUi() {
     centerControlLayout->addWidget(cutBtn);
 
     QPushButton* fadeBtn = new QPushButton("FADE", centralWidget);
-    fadeBtn->setFixedSize(90, 48);
+    fadeBtn->setFixedSize(90, 44);
+    fadeBtn->setToolTip("FADE Transition (F1 / F5)");
     fadeBtn->setStyleSheet(R"(
         QPushButton {
             background-color: #2196F3;
@@ -383,8 +411,48 @@ void MainWindow::setupUi() {
     connect(fadeBtn, &QPushButton::clicked, this, &MainWindow::onFadeClicked);
     centerControlLayout->addWidget(fadeBtn);
 
-    QLabel* durationLabel = new QLabel("Duration:", centralWidget);
-    durationLabel->setStyleSheet("color: #AAAAAA; font-size: 11px; font-weight: bold;");
+    // vMix Manual T-Bar Transition Slider
+    QLabel* tbarHeaderLabel = new QLabel("T-Bar", centralWidget);
+    tbarHeaderLabel->setStyleSheet("color: #FF9800; font-size: 10px; font-weight: bold;");
+    tbarHeaderLabel->setAlignment(Qt::AlignCenter);
+    centerControlLayout->addWidget(tbarHeaderLabel);
+
+    m_tbarSlider = new QSlider(Qt::Vertical, centralWidget);
+    m_tbarSlider->setRange(0, 1000);
+    m_tbarSlider->setValue(0);
+    m_tbarSlider->setFixedHeight(75);
+    m_tbarSlider->setCursor(Qt::PointingHandCursor);
+    m_tbarSlider->setToolTip("T-Bar - Cần gạt chuyển cảnh thủ công (Manual Transition)");
+    m_tbarSlider->setStyleSheet(R"(
+        QSlider::groove:vertical {
+            width: 8px;
+            background: #1C1E2A;
+            border-radius: 4px;
+        }
+        QSlider::sub-page:vertical {
+            background: #2196F3;
+            border-radius: 4px;
+        }
+        QSlider::handle:vertical {
+            background: #FF9800;
+            border: 1px solid #FFFFFF;
+            height: 14px;
+            margin-left: -5px;
+            margin-right: -5px;
+            border-radius: 4px;
+        }
+    )");
+    connect(m_tbarSlider, &QSlider::valueChanged, this, &MainWindow::onTBarSliderMoved);
+    connect(m_tbarSlider, &QSlider::sliderReleased, this, [this]() {
+        if (m_tbarSlider->value() > 500) {
+            onCutClicked();
+        }
+        m_tbarSlider->setValue(0);
+    });
+    centerControlLayout->addWidget(m_tbarSlider, 0, Qt::AlignCenter);
+
+    QLabel* durationLabel = new QLabel("Fade Speed:", centralWidget);
+    durationLabel->setStyleSheet("color: #AAAAAA; font-size: 10px; font-weight: bold;");
     durationLabel->setAlignment(Qt::AlignCenter);
     centerControlLayout->addWidget(durationLabel);
 
@@ -588,10 +656,138 @@ void MainWindow::setupUi() {
     QVBoxLayout* dockGroupLayout = new QVBoxLayout(dockGroup);
     dockGroupLayout->setContentsMargins(6, 12, 6, 6);
 
+    QHBoxLayout* dockHeaderBar = new QHBoxLayout();
+    dockHeaderBar->setContentsMargins(0, 0, 0, 4);
+    dockHeaderBar->setSpacing(6);
+
+    QLabel* categoryLabel = new QLabel("Filter:", dockGroup);
+    categoryLabel->setStyleSheet("color: #AAAAAA; font-size: 11px; font-weight: bold;");
+    dockHeaderBar->addWidget(categoryLabel);
+
+    auto createCatBtn = [this, dockGroup](const QString& text, const QString& catKey, const QString& colorHex) {
+        QPushButton* btn = new QPushButton(text, dockGroup);
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setFixedHeight(22);
+        btn->setStyleSheet(QString(R"(
+            QPushButton {
+                background-color: #212330;
+                color: %1;
+                font-weight: bold;
+                font-size: 10px;
+                border: 1px solid #33364A;
+                border-radius: 4px;
+                padding: 0 8px;
+            }
+            QPushButton:hover {
+                background-color: %1;
+                color: #000000;
+            }
+        )").arg(colorHex));
+        connect(btn, &QPushButton::clicked, this, [this, catKey]() { onCategoryFilterClicked(catKey); });
+        return btn;
+    };
+
+    dockHeaderBar->addWidget(createCatBtn("All", "ALL", "#00ACC1"));
+    dockHeaderBar->addWidget(createCatBtn("🎥 Videos", "VIDEO", "#FF9800"));
+    dockHeaderBar->addWidget(createCatBtn("🖼 Images", "IMAGE", "#4CAF50"));
+
+    // Rows Mode Toggle (1 Row / 2 Rows / Grid)
+    QLabel* rowsLabel = new QLabel("Rows:", dockGroup);
+    rowsLabel->setStyleSheet("color: #AAAAAA; font-size: 11px; font-weight: bold; margin-left: 8px;");
+    dockHeaderBar->addWidget(rowsLabel);
+
+    auto createRowBtn = [this, dockGroup](const QString& text, GridRowsMode mode) {
+        QPushButton* btn = new QPushButton(text, dockGroup);
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setFixedHeight(22);
+        btn->setStyleSheet(R"(
+            QPushButton {
+                background-color: #212330;
+                color: #4FC3F7;
+                font-weight: bold;
+                font-size: 10px;
+                border: 1px solid #33364A;
+                border-radius: 4px;
+                padding: 0 6px;
+            }
+            QPushButton:hover {
+                background-color: #0288D1;
+                color: #FFFFFF;
+            }
+        )");
+        connect(btn, &QPushButton::clicked, this, [this, mode]() {
+            m_rowsMode = mode;
+            rebuildInputDock();
+        });
+        return btn;
+    };
+    dockHeaderBar->addWidget(createRowBtn("1 Row", GridRowsMode::OneRow));
+    dockHeaderBar->addWidget(createRowBtn("2 Rows", GridRowsMode::TwoRows));
+    dockHeaderBar->addWidget(createRowBtn("3 Rows", GridRowsMode::ThreeRows));
+    dockHeaderBar->addWidget(createRowBtn("Grid", GridRowsMode::AutoGrid));
+
+    // Thumbnail Size Toggle (Small / Normal / Large)
+    QLabel* sizeLabel = new QLabel("Size:", dockGroup);
+    sizeLabel->setStyleSheet("color: #AAAAAA; font-size: 11px; font-weight: bold; margin-left: 8px;");
+    dockHeaderBar->addWidget(sizeLabel);
+
+    auto createSizeBtn = [this, dockGroup](const QString& text, ThumbnailSize size) {
+        QPushButton* btn = new QPushButton(text, dockGroup);
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setFixedHeight(22);
+        btn->setStyleSheet(R"(
+            QPushButton {
+                background-color: #212330;
+                color: #FFB74D;
+                font-weight: bold;
+                font-size: 10px;
+                border: 1px solid #33364A;
+                border-radius: 4px;
+                padding: 0 6px;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+                color: #FFFFFF;
+            }
+        )");
+        connect(btn, &QPushButton::clicked, this, [this, size]() {
+            m_thumbSize = size;
+            rebuildInputDock();
+        });
+        return btn;
+    };
+    dockHeaderBar->addWidget(createSizeBtn("Small", ThumbnailSize::Small));
+    dockHeaderBar->addWidget(createSizeBtn("Normal", ThumbnailSize::Normal));
+    dockHeaderBar->addWidget(createSizeBtn("Large", ThumbnailSize::Large));
+
+    dockHeaderBar->addStretch();
+
+    m_searchInput = new QLineEdit(dockGroup);
+    m_searchInput->setPlaceholderText("🔍 Search inputs...");
+    m_searchInput->setFixedWidth(160);
+    m_searchInput->setFixedHeight(22);
+    m_searchInput->setStyleSheet(R"(
+        QLineEdit {
+            background-color: #212330;
+            color: #FFFFFF;
+            font-size: 11px;
+            border: 1px solid #33364A;
+            border-radius: 4px;
+            padding: 2px 6px;
+        }
+        QLineEdit:focus {
+            border: 1px solid #00ACC1;
+        }
+    )");
+    connect(m_searchInput, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged);
+    dockHeaderBar->addWidget(m_searchInput);
+
+    dockGroupLayout->addLayout(dockHeaderBar);
+
     QScrollArea* scrollArea = new QScrollArea(dockGroup);
     scrollArea->setWidgetResizable(true);
     scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     scrollArea->setStyleSheet("QScrollArea { border: none; background: transparent; }");
 
     m_dockContainer = new QWidget(scrollArea);
@@ -688,31 +884,99 @@ void MainWindow::onToggleFullscreenLED() {
 }
 
 void MainWindow::rebuildInputDock() {
-    if (!m_dockLayout) return;
+    if (!m_dockContainer) return;
 
-    QLayoutItem* item;
-    while ((item = m_dockLayout->takeAt(0)) != nullptr) {
-        if (item->widget()) {
-            delete item->widget();
+    if (m_dockContainer->layout()) {
+        QLayoutItem* item;
+        while ((item = m_dockContainer->layout()->takeAt(0)) != nullptr) {
+            if (item->widget()) {
+                delete item->widget();
+            }
+            delete item;
         }
-        delete item;
+        delete m_dockContainer->layout();
     }
+
+    QGridLayout* gridLayout = new QGridLayout(m_dockContainer);
+    gridLayout->setContentsMargins(0, 0, 0, 0);
+    gridLayout->setSpacing(6);
+    gridLayout->setAlignment(Qt::AlignLeft | Qt::AlignTop);
 
     const auto& slotList = m_inputManager.inputSlots();
     int pvwId = m_inputManager.previewSlotId();
     int pgmId = m_inputManager.programSlotId();
 
+    int cardW = 160;
+    int cardH = 100;
+    if (m_thumbSize == ThumbnailSize::Small) {
+        cardW = 115;
+        cardH = 72;
+    } else if (m_thumbSize == ThumbnailSize::Large) {
+        cardW = 200;
+        cardH = 125;
+    }
+
+    int cardIndex = 0;
     for (const auto& slot : slotList) {
+        // Category Filter
+        if (m_activeCategory == "VIDEO" && slot.type != InputType::VideoFile) continue;
+        if (m_activeCategory == "IMAGE" && slot.type != InputType::ImageFile) continue;
+
+        // Search Query Filter
+        if (!m_searchQuery.isEmpty()) {
+            QString nameStr = QString::fromStdString(slot.name);
+            if (!nameStr.contains(m_searchQuery, Qt::CaseInsensitive)) continue;
+        }
+
         bool isPvw = (slot.id == pvwId);
         bool isPgm = (slot.id == pgmId);
 
         InputSlotWidget* slotWidget = new InputSlotWidget(slot, isPvw, isPgm, m_dockContainer);
-        connect(slotWidget, &InputSlotWidget::clicked, this, [this](int slotId) {
+        slotWidget->setCardSize(cardW, cardH);
+
+        connect(slotWidget, &InputSlotWidget::clicked, this, [this, slot](int slotId) {
             m_inputManager.setPreviewSlot(slotId);
+            if (slot.type == InputType::Playlist && slot.source) {
+                auto playlistSrc = std::dynamic_pointer_cast<PlaylistSource>(slot.source);
+                if (playlistSrc) {
+                    PlaylistDialog dlg(playlistSrc, this);
+                    dlg.exec();
+                }
+            }
+        });
+        connect(slotWidget, &InputSlotWidget::removeRequested, this, [this](int slotId) {
+            m_inputManager.removeSlot(slotId);
         });
 
-        m_dockLayout->addWidget(slotWidget);
+        if (m_rowsMode == GridRowsMode::ThreeRows) {
+            int row = cardIndex % 3;
+            int col = cardIndex / 3;
+            gridLayout->addWidget(slotWidget, row, col);
+        } else if (m_rowsMode == GridRowsMode::TwoRows) {
+            int row = cardIndex % 2;
+            int col = cardIndex / 2;
+            gridLayout->addWidget(slotWidget, row, col);
+        } else if (m_rowsMode == GridRowsMode::AutoGrid) {
+            int maxColsPerLine = 8;
+            int row = cardIndex / maxColsPerLine;
+            int col = cardIndex % maxColsPerLine;
+            gridLayout->addWidget(slotWidget, row, col);
+        } else { // OneRow
+            gridLayout->addWidget(slotWidget, 0, cardIndex);
+        }
+
+        cardIndex++;
     }
+}
+
+void MainWindow::onCategoryFilterClicked(const QString& category) {
+    m_activeCategory = category;
+    rebuildInputDock();
+}
+
+void MainWindow::onSearchTextChanged(const QString& text) {
+    m_searchQuery = text.trimmed();
+    rebuildInputDock();
 }
 
 void MainWindow::onAddVideoInput() {
@@ -749,11 +1013,18 @@ void MainWindow::onAddVideoInput() {
     }
 }
 
-void MainWindow::onAddColorBarsInput() {
-    int slotId = m_inputManager.addColorBarsSlot();
+void MainWindow::onAddPlaylistInput() {
+    int slotId = m_inputManager.addPlaylistSlot();
     if (slotId > 0) {
-        m_inputManager.setPreviewSlot(slotId);
-        statusBar()->showMessage(QString("Added Color Bars Input #%1").arg(slotId));
+        auto* slot = m_inputManager.getSlot(slotId);
+        if (slot && slot->source) {
+            auto playlistSrc = std::dynamic_pointer_cast<PlaylistSource>(slot->source);
+            if (playlistSrc) {
+                PlaylistDialog dlg(playlistSrc, this);
+                dlg.exec();
+            }
+        }
+        statusBar()->showMessage(QString("Added Playlist Slot #%1").arg(slotId));
     }
 }
 
@@ -763,6 +1034,120 @@ void MainWindow::onQuickPlayClicked() {
         pvwSource->play();
     }
     onCutClicked();
+}
+
+void MainWindow::onFTBClicked() {
+    m_isFtbActive = !m_isFtbActive;
+
+    if (m_pgmWindow && m_pgmWindow->renderer()) {
+        m_pgmWindow->renderer()->setFTB(m_isFtbActive, 500.0f);
+    }
+    if (m_ledOutputWindow && m_ledOutputWindow->directXWindow() && m_ledOutputWindow->directXWindow()->renderer()) {
+        m_ledOutputWindow->directXWindow()->renderer()->setFTB(m_isFtbActive, 500.0f);
+    }
+
+    if (m_isFtbActive) {
+        m_ftbBtn->setStyleSheet(R"(
+            QPushButton {
+                background-color: #B71C1C;
+                color: #FFFF00;
+                font-weight: bold;
+                font-size: 14px;
+                border: 2px solid #FFEB3B;
+                border-radius: 6px;
+            }
+        )");
+        m_ftbBtn->setText("FTB [ON]");
+        statusBar()->showMessage("FTB (Fade To Black) ACTIVATED - Output is BLACK");
+    } else {
+        m_ftbBtn->setStyleSheet(R"(
+            QPushButton {
+                background-color: #212121;
+                color: #E53935;
+                font-weight: bold;
+                font-size: 14px;
+                border: 2px solid #B71C1C;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background-color: #B71C1C;
+                color: #FFFFFF;
+            }
+        )");
+        m_ftbBtn->setText("FTB");
+        statusBar()->showMessage("FTB Deactivated - Output Restored");
+    }
+}
+
+void MainWindow::onTBarSliderMoved(int value) {
+    float progress = static_cast<float>(value) / 1000.0f;
+    auto pvwSource = m_inputManager.previewSource();
+    auto pgmSource = m_inputManager.programSource();
+
+    if (pvwSource && pgmSource) {
+        if (m_pgmWindow && m_pgmWindow->renderer()) {
+            m_pgmWindow->renderer()->setManualTransition(pgmSource, pvwSource, progress);
+        }
+        if (m_ledOutputWindow && m_ledOutputWindow->directXWindow() && m_ledOutputWindow->directXWindow()->renderer()) {
+            m_ledOutputWindow->directXWindow()->renderer()->setManualTransition(pgmSource, pvwSource, progress);
+        }
+    }
+}
+
+void MainWindow::keyPressEvent(QKeyEvent *event) {
+    if (!event) return;
+
+    int key = event->key();
+    Qt::KeyboardModifiers modifiers = event->modifiers();
+
+    // 1. Spacebar = Quick Play
+    if (key == Qt::Key_Space) {
+        onQuickPlayClicked();
+        event->accept();
+        return;
+    }
+
+    // 2. Enter / Return = CUT
+    if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+        onCutClicked();
+        event->accept();
+        return;
+    }
+
+    // 3. F1 or F5 = FADE
+    if (key == Qt::Key_F1 || key == Qt::Key_F5) {
+        onFadeClicked();
+        event->accept();
+        return;
+    }
+
+    // 4. F12 = FTB
+    if (key == Qt::Key_F12) {
+        onFTBClicked();
+        event->accept();
+        return;
+    }
+
+    // 5. Number Keys 1..9
+    if (key >= Qt::Key_1 && key <= Qt::Key_9) {
+        int channelNum = key - Qt::Key_1 + 1; // 1 to 9
+        const auto& slotList = m_inputManager.inputSlots();
+        if (channelNum <= static_cast<int>(slotList.size())) {
+            int slotId = slotList[channelNum - 1].id;
+            if (modifiers & Qt::ShiftModifier) {
+                // Shift + Number -> Send directly LIVE to PGM
+                m_inputManager.setPreviewSlot(slotId);
+                onCutClicked();
+            } else {
+                // Number -> Set to PREVIEW
+                m_inputManager.setPreviewSlot(slotId);
+            }
+        }
+        event->accept();
+        return;
+    }
+
+    QMainWindow::keyPressEvent(event);
 }
 
 void MainWindow::onCutClicked() {

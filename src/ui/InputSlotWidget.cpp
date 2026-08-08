@@ -44,6 +44,29 @@ InputSlotWidget::InputSlotWidget(const InputSlot& slot, bool isPvw, bool isPgm, 
         }
     });
 
+    m_closeBtn = new QPushButton("✕", this);
+    m_closeBtn->setFixedSize(18, 18);
+    m_closeBtn->move(160 - 22, 4);
+    m_closeBtn->setCursor(Qt::PointingHandCursor);
+    m_closeBtn->setToolTip("Remove Input Slot");
+    m_closeBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: rgba(180, 20, 20, 210);
+            color: #FFFFFF;
+            font-size: 10px;
+            font-weight: bold;
+            border: 1px solid #FF5252;
+            border-radius: 9px;
+        }
+        QPushButton:hover {
+            background-color: #FF1744;
+            color: #FFFFFF;
+        }
+    )");
+    connect(m_closeBtn, &QPushButton::clicked, this, [this]() {
+        emit removeRequested(m_slotId);
+    });
+
     m_refreshTimer = new QTimer(this);
     connect(m_refreshTimer, &QTimer::timeout, this, [this]() {
         if (this->isVisible()) {
@@ -51,6 +74,21 @@ InputSlotWidget::InputSlotWidget(const InputSlot& slot, bool isPvw, bool isPgm, 
         }
     });
     m_refreshTimer->start(33); // Refresh thumbnail at ~30 FPS
+}
+
+void InputSlotWidget::setCardSize(int w, int h) {
+    this->setFixedSize(w, h);
+    if (m_playBtn) {
+        int btnS = (h < 85) ? 18 : 22;
+        m_playBtn->setFixedSize(btnS, btnS);
+        m_playBtn->move(w - btnS - 6, h - btnS - 6);
+    }
+    if (m_closeBtn) {
+        int closeS = (h < 85) ? 15 : 18;
+        m_closeBtn->setFixedSize(closeS, closeS);
+        m_closeBtn->move(w - closeS - 3, 3);
+    }
+    this->update();
 }
 
 void InputSlotWidget::mousePressEvent(QMouseEvent *event) {
@@ -87,34 +125,49 @@ void InputSlotWidget::paintEvent(QPaintEvent *event) {
         }
     }
 
-    // 2. Draw Bottom Dark Gradient Overlay for Text Readability
-    QLinearGradient grad(0, h * 0.4, 0, h);
+    // 2. Draw Top-Left Channel Number Badge (STRICTLY confined to badgeRect 22x16)
+    int badgeW = (h < 85) ? 18 : 22;
+    int badgeH = (h < 85) ? 14 : 16;
+    QRect badgeRect(3, 3, badgeW, badgeH);
+
+    QColor badgeBg = m_isPgm ? QColor(229, 57, 53) : (m_isPvw ? QColor(255, 152, 0) : QColor(0, 0, 0, 200));
+    painter.fillRect(badgeRect, badgeBg);
+
+    painter.setPen(QColor(255, 255, 255));
+    QFont badgeFont = painter.font();
+    badgeFont.setBold(true);
+    badgeFont.setPixelSize(h < 85 ? 9 : 10);
+    painter.setFont(badgeFont);
+    painter.drawText(badgeRect, Qt::AlignCenter, QString::number(m_slotId));
+
+    // 3. Draw Bottom Dark Gradient for Text Readability ONLY
+    QLinearGradient grad(0, h * 0.5, 0, h);
     grad.setColorAt(0.0, QColor(0, 0, 0, 0));
     grad.setColorAt(1.0, QColor(0, 0, 0, 220));
-    painter.fillRect(rect(), grad);
+    painter.fillRect(QRect(0, h / 2, w, h / 2), grad);
 
-    // 3. Draw Badge Text Overlay
-    QString badge = "";
+    // 4. Draw Badge Text Overlay
+    QString statusBadge = "";
     if (m_isPgm && m_isPvw) {
-        badge = " [PVW/PGM]";
+        statusBadge = " [PVW/PGM]";
     } else if (m_isPgm) {
-        badge = " [PGM]";
+        statusBadge = " [PGM]";
     } else if (m_isPvw) {
-        badge = " [PVW]";
+        statusBadge = " [PVW]";
     }
 
-    QString text = QString("[%1] %2%3").arg(m_slotId).arg(QString::fromStdString(m_name)).arg(badge);
+    QString text = QString("%1%2").arg(QString::fromStdString(m_name)).arg(statusBadge);
     
     QFont font = painter.font();
     font.setBold(true);
-    font.setPixelSize(11);
+    font.setPixelSize(h < 85 ? 9 : 11);
     painter.setFont(font);
 
     painter.setPen(QColor(255, 255, 255));
-    QRect textRect(6, h - 28, w - 12, 24);
+    QRect textRect = (h < 85) ? QRect(4, h - 20, w - 24, 18) : QRect(6, h - 28, w - 28, 24);
     painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, text);
 
-    // 4. Update Play/Pause Overlay Button Icon
+    // 5. Update Play/Pause Overlay Button Icon
     if (m_playBtn && m_source) {
         if (m_source->isPlaying()) {
             m_playBtn->setText("⏸");
@@ -123,10 +176,10 @@ void InputSlotWidget::paintEvent(QPaintEvent *event) {
         }
     }
 
-    // 5. Draw vMix Border
+    // 6. Draw vMix Border (NO BRUSH - OUTLINE ONLY)
     QPen pen;
     if (m_isPgm && m_isPvw) {
-        pen.setColor(QColor(255, 110, 0)); // Intense Amber-Red for PVW+PGM
+        pen.setColor(QColor(255, 110, 0)); // Amber-Red for PVW+PGM
         pen.setWidth(3);
     } else if (m_isPgm) {
         pen.setColor(QColor(229, 57, 53)); // Red for PGM
@@ -138,6 +191,8 @@ void InputSlotWidget::paintEvent(QPaintEvent *event) {
         pen.setColor(QColor(58, 61, 82));  // Dark Grey
         pen.setWidth(1);
     }
+
     painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
     painter.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 6, 6);
 }

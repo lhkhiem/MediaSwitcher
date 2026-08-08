@@ -93,6 +93,38 @@ void Renderer::startTransition(std::shared_ptr<IMediaSource> fromSource,
     LOG_INFO("Renderer: Triggered transition cross-dissolve ({:.0f} ms).", m_transitionDurationMs);
 }
 
+void Renderer::setFTB(bool active, float durationMs) {
+    std::lock_guard<std::mutex> lock(m_renderMutex);
+    m_ftbActive = active;
+    m_ftbDurationMs = durationMs <= 0.0f ? 500.0f : durationMs;
+    m_ftbStartTime = std::chrono::steady_clock::now();
+}
+
+void Renderer::setManualTransition(std::shared_ptr<IMediaSource> fromSource,
+                                    std::shared_ptr<IMediaSource> toSource,
+                                    float progress) {
+    std::lock_guard<std::mutex> lock(m_renderMutex);
+    if (!fromSource || !toSource) return;
+
+    m_fromSource = fromSource;
+    m_toSource = toSource;
+    m_isManualTransition = true;
+    m_isTransitioning = false;
+    m_manualProgress = (progress < 0.0f) ? 0.0f : ((progress > 1.0f) ? 1.0f : progress);
+
+    if (m_manualProgress >= 1.0f) {
+        m_isManualTransition = false;
+        m_mediaSource = m_toSource;
+        m_fromSource.reset();
+        m_toSource.reset();
+    } else if (m_manualProgress <= 0.0f) {
+        m_isManualTransition = false;
+        m_mediaSource = m_fromSource;
+        m_fromSource.reset();
+        m_toSource.reset();
+    }
+}
+
 void Renderer::releaseRenderTargetView() {
     std::lock_guard<std::mutex> lock(m_renderMutex);
     m_renderTargetView.Reset();
@@ -259,14 +291,53 @@ void Renderer::renderFrame() {
         m_context->RSSetViewports(1, &vp);
     }
 
-    float clearColor[4] = { 0.05f, 0.05f, 0.07f, 1.0f };
+    // Calculate FTB (Fade To Black) Alpha Level
+    float targetFtbAlpha = m_ftbActive ? 1.0f : 0.0f;
+    if (m_ftbCurrentAlpha != targetFtbAlpha) {
+        auto now = std::chrono::steady_clock::now();
+        float elapsedMs = std::chrono::duration<float, std::milli>(now - m_ftbStartTime).count();
+        float progress = elapsedMs / m_ftbDurationMs;
+        if (m_ftbActive) {
+            m_ftbCurrentAlpha = (progress > 1.0f) ? 1.0f : progress;
+        } else {
+            m_ftbCurrentAlpha = (1.0f - progress < 0.0f) ? 0.0f : (1.0f - progress);
+        }
+    }
+    float videoMasterAlpha = (m_ftbCurrentAlpha >= 1.0f) ? 0.0f : (1.0f - m_ftbCurrentAlpha);
+    if (videoMasterAlpha < 0.0f) videoMasterAlpha = 0.0f;
+
+    float clearColor[4] = { 0.05f * videoMasterAlpha, 0.05f * videoMasterAlpha, 0.07f * videoMasterAlpha, 1.0f };
     m_context->ClearRenderTargetView(m_renderTargetView.Get(), clearColor);
     m_context->OMSetRenderTargets(1, m_renderTargetView.GetAddressOf(), nullptr);
 
     if (m_rasterizerState) m_context->RSSetState(m_rasterizerState.Get());
     if (m_blendState) m_context->OMSetBlendState(m_blendState.Get(), nullptr, 0xFFFFFFFF);
 
-    if (m_isTransitioning) {
+    if (m_isManualTransition) {
+        float progress = m_manualProgress;
+
+        if (m_fromSource) {
+            auto frameA = m_fromSource->getFrame();
+            if (frameA) {
+                if (!m_texAInit || m_textureA.width() != frameA->width() || m_textureA.height() != frameA->height()) {
+                    if (m_textureA.initialize(m_device.Get(), frameA->width(), frameA->height())) m_texAInit = true;
+                }
+                if (m_texAInit) m_textureA.update(m_context.Get(), *frameA);
+            }
+            if (m_texAInit) drawTexture(m_textureA, (1.0f - progress) * videoMasterAlpha, windowW, windowH);
+        }
+
+        if (m_toSource) {
+            auto frameB = m_toSource->getFrame();
+            if (frameB) {
+                if (!m_texBInit || m_textureB.width() != frameB->width() || m_textureB.height() != frameB->height()) {
+                    if (m_textureB.initialize(m_device.Get(), frameB->width(), frameB->height())) m_texBInit = true;
+                }
+                if (m_texBInit) m_textureB.update(m_context.Get(), *frameB);
+            }
+            if (m_texBInit) drawTexture(m_textureB, progress * videoMasterAlpha, windowW, windowH);
+        }
+    } else if (m_isTransitioning) {
         auto now = std::chrono::steady_clock::now();
         float elapsedMs = std::chrono::duration<float, std::milli>(now - m_transitionStartTime).count();
         float progress = elapsedMs / m_transitionDurationMs;
@@ -288,7 +359,7 @@ void Renderer::renderFrame() {
                 }
                 if (m_texAInit) m_textureA.update(m_context.Get(), *frameA);
             }
-            if (m_texAInit) drawTexture(m_textureA, 1.0f - progress, windowW, windowH);
+            if (m_texAInit) drawTexture(m_textureA, (1.0f - progress) * videoMasterAlpha, windowW, windowH);
         }
 
         // Draw Source B (To) over A
@@ -300,7 +371,7 @@ void Renderer::renderFrame() {
                 }
                 if (m_texBInit) m_textureB.update(m_context.Get(), *frameB);
             }
-            if (m_texBInit) drawTexture(m_textureB, progress, windowW, windowH);
+            if (m_texBInit) drawTexture(m_textureB, progress * videoMasterAlpha, windowW, windowH);
         }
     } else if (m_mediaSource) {
         auto frame = m_mediaSource->getFrame();
@@ -308,22 +379,14 @@ void Renderer::renderFrame() {
             if (!m_texAInit || m_textureA.width() != frame->width() || m_textureA.height() != frame->height()) {
                 if (m_textureA.initialize(m_device.Get(), frame->width(), frame->height())) {
                     m_texAInit = true;
-                    LOG_INFO("Renderer: Initialized D3D11 texture A ({}x{})", frame->width(), frame->height());
-                } else {
-                    LOG_ERROR("Renderer: Failed to initialize D3D11 texture A ({}x{})", frame->width(), frame->height());
                 }
             }
             if (m_texAInit) {
                 m_textureA.update(m_context.Get(), *frame);
             }
-        } else {
-            static int nullCount = 0;
-            if (++nullCount % 60 == 1) {
-                LOG_WARN("Renderer: m_mediaSource->getFrame() returned nullptr");
-            }
         }
         if (m_texAInit) {
-            drawTexture(m_textureA, 1.0f, windowW, windowH);
+            drawTexture(m_textureA, 1.0f * videoMasterAlpha, windowW, windowH);
         }
     }
 

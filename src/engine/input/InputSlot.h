@@ -9,7 +9,8 @@ enum class InputType {
     ColorBars,
     VideoFile,
     ImageFile,
-    RTSPStream
+    RTSPStream,
+    Playlist
 };
 
 struct InputSlot {

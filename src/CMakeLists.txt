@@ -24,6 +24,8 @@ set(SOURCES
     ui/FullscreenLEDWindow.h
     ui/InputSlotWidget.cpp
     ui/InputSlotWidget.h
+    ui/PlaylistDialog.cpp
+    ui/PlaylistDialog.h
     engine/renderer/DirectXWindow.cpp
     engine/renderer/DirectXWindow.h
     engine/renderer/Renderer.cpp
@@ -41,6 +43,8 @@ set(SOURCES
     engine/input/ColorBarsSource.h
     engine/input/FileSource.cpp
     engine/input/FileSource.h
+    engine/input/PlaylistSource.cpp
+    engine/input/PlaylistSource.h
     engine/decoder/FFmpegDecoder.cpp
     engine/decoder/FFmpegDecoder.h
 )

@@ -19,6 +19,8 @@
 
 class DirectXWindow;
 
+#include <QLineEdit>
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -28,13 +30,16 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private slots:
     void onAddVideoInput();
-    void onAddColorBarsInput();
+    void onAddPlaylistInput();
     void onQuickPlayClicked();
     void onCutClicked();
     void onFadeClicked();
+    void onFTBClicked();
+    void onTBarSliderMoved(int value);
     void onToggleFullscreenLED();
     void rebuildInputDock();
     void updateViewports();
@@ -47,6 +52,8 @@ private slots:
     void onPgmLoopToggleClicked();
     void onPgmSeekSliderSliderMoved(int value);
     void updatePlaybackStatus();
+    void onCategoryFilterClicked(const QString& category);
+    void onSearchTextChanged(const QString& text);
 
 private:
     void setupUi();
@@ -63,6 +70,20 @@ private:
     QComboBox* m_fadeDurationCombo{nullptr};
     QComboBox* m_screenSelectorCombo{nullptr};
     QPushButton* m_fullscreenToggleBtn{nullptr};
+
+    QPushButton* m_ftbBtn{nullptr};
+    QSlider* m_tbarSlider{nullptr};
+    bool m_isFtbActive{false};
+
+    enum class GridRowsMode { OneRow, TwoRows, ThreeRows, AutoGrid };
+    enum class ThumbnailSize { Small, Normal, Large };
+
+    GridRowsMode m_rowsMode{GridRowsMode::OneRow};
+    ThumbnailSize m_thumbSize{ThumbnailSize::Normal};
+
+    QString m_activeCategory{"ALL"};
+    QString m_searchQuery{""};
+    QLineEdit* m_searchInput{nullptr};
 
     QPushButton* m_pvwPlayPauseBtn{nullptr};
     QPushButton* m_pvwResetBtn{nullptr};

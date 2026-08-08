@@ -13,7 +13,6 @@ public:
 
     int addColorBarsSlot(const std::string& name = "Color Bars");
     int addFileSlot(const std::string& filePath, const std::string& name = "");
-    int addPlaylistSlot(const std::string& name = "Playlist");
     bool removeSlot(int slotId);
 
     const std::vector<InputSlot>& inputSlots() const { return m_slots; }

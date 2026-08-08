@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QScrollArea>
 #include "engine/input/InputManager.h"
+#include "engine/input/GlobalPlaylistController.h"
 #include "FullscreenLEDWindow.h"
 #include "InputSlotWidget.h"
 #include <memory>
@@ -36,8 +37,9 @@ private slots:
     void onAddVideoInput();
     void onAddPlaylistInput();
     void onQuickPlayClicked();
-    void onCutClicked();
-    void onFadeClicked();
+    void onCutClicked(bool isManualUserAction = true);
+    void onFadeClicked(bool isManualUserAction = true);
+    void stopGlobalPlaylistUI();
     void onFTBClicked();
     void onTBarSliderMoved(int value);
     void onToggleFullscreenLED();
@@ -55,15 +57,23 @@ private slots:
     void onCategoryFilterClicked(const QString& category);
     void onSearchTextChanged(const QString& text);
 
+    void onToggleGlobalPlaylist();
+    void onPauseGlobalPlaylist();
+    void onPlaylistPrevClicked();
+    void onPlaylistNextClicked();
+    void onConfigGlobalPlaylist();
+
 private:
     void setupUi();
     void populateScreenSelector();
+    void advancePlaylistStep();
 
     DirectXWindow* m_pvwWindow{nullptr};
     DirectXWindow* m_pgmWindow{nullptr};
     FullscreenLEDWindow* m_ledOutputWindow{nullptr};
 
     InputManager m_inputManager;
+    GlobalPlaylistController m_playlistController;
 
     QWidget* m_dockContainer{nullptr};
     QHBoxLayout* m_dockLayout{nullptr};
@@ -74,6 +84,12 @@ private:
     QPushButton* m_ftbBtn{nullptr};
     QSlider* m_tbarSlider{nullptr};
     bool m_isFtbActive{false};
+
+    QPushButton* m_playlistToggleBtn{nullptr};
+    QPushButton* m_playlistPrevBtn{nullptr};
+    QPushButton* m_playlistPauseBtn{nullptr};
+    QPushButton* m_playlistNextBtn{nullptr};
+    QPushButton* m_playlistConfigBtn{nullptr};
 
     enum class GridRowsMode { OneRow, TwoRows, ThreeRows, AutoGrid };
     enum class ThumbnailSize { Small, Normal, Large };

@@ -2,13 +2,14 @@
 #include "engine/renderer/DirectXWindow.h"
 #include "ui/FullscreenLEDWindow.h"
 #include "ui/InputSlotWidget.h"
-#include "ui/PlaylistDialog.h"
-#include "engine/input/PlaylistSource.h"
+#include "ui/GlobalPlaylistDialog.h"
+#include "engine/input/GlobalPlaylistController.h"
 #include "common/logger/Logger.h"
 
 #include <QToolBar>
 #include <QFileDialog>
 #include <QStatusBar>
+#include <QMessageBox>
 #include <QGroupBox>
 #include <QStyle>
 #include <QApplication>
@@ -110,9 +111,6 @@ void MainWindow::setupUi() {
 
     QAction* addVideoAction = toolbar->addAction("📂 + Add Input(s)");
     connect(addVideoAction, &QAction::triggered, this, &MainWindow::onAddVideoInput);
-
-    QAction* addPlaylistAction = toolbar->addAction("📋 + Add Playlist");
-    connect(addPlaylistAction, &QAction::triggered, this, &MainWindow::onAddPlaylistInput);
 
     toolbar->addSeparator();
 
@@ -324,6 +322,7 @@ void MainWindow::setupUi() {
     centerControlLayout->setAlignment(Qt::AlignCenter);
     centerControlLayout->setSpacing(8);
 
+
     // FTB Emergency Button (vMix Fade To Black)
     m_ftbBtn = new QPushButton("FTB", centralWidget);
     m_ftbBtn->setFixedSize(90, 36);
@@ -471,6 +470,81 @@ void MainWindow::setupUi() {
         }
     )");
     centerControlLayout->addWidget(m_fadeDurationCombo);
+
+    m_playlistToggleBtn = new QPushButton("▶ START PLAYLIST", centralWidget);
+    m_playlistToggleBtn->setFixedWidth(110);
+    m_playlistToggleBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #388E3C; color: #FFFFFF; font-weight: bold; font-size: 11px;
+            border: 1px solid #4CAF50; border-radius: 4px; padding: 6px;
+        }
+        QPushButton:hover { background-color: #4CAF50; }
+    )");
+    connect(m_playlistToggleBtn, &QPushButton::clicked, this, &MainWindow::onToggleGlobalPlaylist);
+    centerControlLayout->addWidget(m_playlistToggleBtn);
+
+    // Playlist Navigation Cluster (PREV / PAUSE / NEXT)
+    QHBoxLayout* playlistNavLayout = new QHBoxLayout();
+    playlistNavLayout->setSpacing(4);
+
+    m_playlistPrevBtn = new QPushButton("⏮", centralWidget);
+    m_playlistPrevBtn->setFixedSize(32, 28);
+    m_playlistPrevBtn->setEnabled(false);
+    m_playlistPrevBtn->setToolTip("Jump to Previous Playlist Track");
+    m_playlistPrevBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #0288D1; color: #FFFFFF; font-weight: bold; font-size: 12px;
+            border: 1px solid #039BE5; border-radius: 4px;
+        }
+        QPushButton:hover { background-color: #039BE5; }
+        QPushButton:disabled { background-color: #33364A; color: #666666; border: none; }
+    )");
+    connect(m_playlistPrevBtn, &QPushButton::clicked, this, &MainWindow::onPlaylistPrevClicked);
+    playlistNavLayout->addWidget(m_playlistPrevBtn);
+
+    m_playlistPauseBtn = new QPushButton("⏸", centralWidget);
+    m_playlistPauseBtn->setFixedSize(38, 28);
+    m_playlistPauseBtn->setEnabled(false);
+    m_playlistPauseBtn->setToolTip("Pause / Resume Playlist");
+    m_playlistPauseBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #F57F17; color: #FFFFFF; font-weight: bold; font-size: 12px;
+            border: 1px solid #FBC02D; border-radius: 4px;
+        }
+        QPushButton:hover { background-color: #FBC02D; }
+        QPushButton:disabled { background-color: #33364A; color: #666666; border: none; }
+    )");
+    connect(m_playlistPauseBtn, &QPushButton::clicked, this, &MainWindow::onPauseGlobalPlaylist);
+    playlistNavLayout->addWidget(m_playlistPauseBtn);
+
+    m_playlistNextBtn = new QPushButton("⏭", centralWidget);
+    m_playlistNextBtn->setFixedSize(32, 28);
+    m_playlistNextBtn->setEnabled(false);
+    m_playlistNextBtn->setToolTip("Jump to Next Playlist Track");
+    m_playlistNextBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #0288D1; color: #FFFFFF; font-weight: bold; font-size: 12px;
+            border: 1px solid #039BE5; border-radius: 4px;
+        }
+        QPushButton:hover { background-color: #039BE5; }
+        QPushButton:disabled { background-color: #33364A; color: #666666; border: none; }
+    )");
+    connect(m_playlistNextBtn, &QPushButton::clicked, this, &MainWindow::onPlaylistNextClicked);
+    playlistNavLayout->addWidget(m_playlistNextBtn);
+
+    centerControlLayout->addLayout(playlistNavLayout);
+
+    m_playlistConfigBtn = new QPushButton("📋 Config Playlist", centralWidget);
+    m_playlistConfigBtn->setFixedWidth(110);
+    m_playlistConfigBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #00838F; color: #FFFFFF; font-size: 10px; font-weight: bold;
+            border: 1px solid #00ACC1; border-radius: 4px; padding: 4px;
+        }
+        QPushButton:hover { background-color: #00ACC1; }
+    )");
+    connect(m_playlistConfigBtn, &QPushButton::clicked, this, &MainWindow::onConfigGlobalPlaylist);
+    centerControlLayout->addWidget(m_playlistConfigBtn);
 
     topLayout->addLayout(centerControlLayout, 1);
 
@@ -934,15 +1008,8 @@ void MainWindow::rebuildInputDock() {
         InputSlotWidget* slotWidget = new InputSlotWidget(slot, isPvw, isPgm, m_dockContainer);
         slotWidget->setCardSize(cardW, cardH);
 
-        connect(slotWidget, &InputSlotWidget::clicked, this, [this, slot](int slotId) {
+        connect(slotWidget, &InputSlotWidget::clicked, this, [this](int slotId) {
             m_inputManager.setPreviewSlot(slotId);
-            if (slot.type == InputType::Playlist && slot.source) {
-                auto playlistSrc = std::dynamic_pointer_cast<PlaylistSource>(slot.source);
-                if (playlistSrc) {
-                    PlaylistDialog dlg(playlistSrc, this);
-                    dlg.exec();
-                }
-            }
         });
         connect(slotWidget, &InputSlotWidget::removeRequested, this, [this](int slotId) {
             m_inputManager.removeSlot(slotId);
@@ -1014,26 +1081,181 @@ void MainWindow::onAddVideoInput() {
 }
 
 void MainWindow::onAddPlaylistInput() {
-    int slotId = m_inputManager.addPlaylistSlot();
-    if (slotId > 0) {
-        auto* slot = m_inputManager.getSlot(slotId);
-        if (slot && slot->source) {
-            auto playlistSrc = std::dynamic_pointer_cast<PlaylistSource>(slot->source);
-            if (playlistSrc) {
-                PlaylistDialog dlg(playlistSrc, this);
-                dlg.exec();
-            }
+    // Deprecated standalone playlist
+}
+
+void MainWindow::stopGlobalPlaylistUI() {
+    if (m_playlistController.isActive()) {
+        m_playlistController.stop();
+        for (const auto& slot : m_inputManager.inputSlots()) {
+            if (slot.source) slot.source->setLoop(true);
         }
-        statusBar()->showMessage(QString("Added Playlist Slot #%1").arg(slotId));
+        if (m_playlistToggleBtn) {
+            m_playlistToggleBtn->setText("▶ START PLAYLIST");
+            m_playlistToggleBtn->setStyleSheet(R"(
+                QPushButton {
+                    background-color: #388E3C; color: #FFFFFF; font-weight: bold; font-size: 11px;
+                    border: 1px solid #4CAF50; border-radius: 4px; padding: 6px;
+                }
+                QPushButton:hover { background-color: #4CAF50; }
+            )");
+        }
+        if (m_playlistPrevBtn) m_playlistPrevBtn->setEnabled(false);
+        if (m_playlistPauseBtn) {
+            m_playlistPauseBtn->setEnabled(false);
+            m_playlistPauseBtn->setText("⏸");
+        }
+        if (m_playlistNextBtn) m_playlistNextBtn->setEnabled(false);
+
+        // Re-enable PGM Bar controls when Playlist stops
+        if (m_pgmPlayPauseBtn) m_pgmPlayPauseBtn->setEnabled(true);
+        if (m_pgmResetBtn) m_pgmResetBtn->setEnabled(true);
+        if (m_pgmLoopBtn) m_pgmLoopBtn->setEnabled(true);
+        if (m_pgmSeekSlider) m_pgmSeekSlider->setEnabled(true);
+
+        statusBar()->showMessage("Manual transition executed. Exited Playlist Mode.");
     }
 }
 
+void MainWindow::onToggleGlobalPlaylist() {
+    if (m_playlistController.isActive()) {
+        stopGlobalPlaylistUI();
+        statusBar()->showMessage("Exited Playlist Mode. Manual switching restored.");
+    } else {
+        if (m_playlistController.steps().empty()) {
+            QMessageBox::warning(this, "Playlist Empty", "Please configure Playlist sequence first by clicking '📋 Config Playlist'.");
+            onConfigGlobalPlaylist();
+            return;
+        }
+
+        // Disable internal source looping for all inputs so playlist can advance on EOF
+        for (const auto& slot : m_inputManager.inputSlots()) {
+            if (slot.source) slot.source->setLoop(false);
+        }
+
+        m_playlistController.start();
+        m_playlistToggleBtn->setText("⏹ EXIT PLAYLIST");
+        m_playlistToggleBtn->setStyleSheet(R"(
+            QPushButton {
+                background-color: #D32F2F; color: #FFFFFF; font-weight: bold; font-size: 11px;
+                border: 1px solid #F44336; border-radius: 4px; padding: 6px;
+            }
+            QPushButton:hover { background-color: #E53935; }
+        )");
+
+        if (m_playlistPrevBtn) m_playlistPrevBtn->setEnabled(true);
+        if (m_playlistPauseBtn) {
+            m_playlistPauseBtn->setEnabled(true);
+            m_playlistPauseBtn->setText("⏸");
+        }
+        if (m_playlistNextBtn) m_playlistNextBtn->setEnabled(true);
+
+        // Disable discrete PGM buttons during Playlist mode, BUT KEEP SEEK SLIDER ENABLED for video scrubbing
+        if (m_pgmPlayPauseBtn) m_pgmPlayPauseBtn->setEnabled(false);
+        if (m_pgmResetBtn) m_pgmResetBtn->setEnabled(false);
+        if (m_pgmLoopBtn) m_pgmLoopBtn->setEnabled(false);
+        if (m_pgmSeekSlider) m_pgmSeekSlider->setEnabled(true);
+
+        auto step1 = m_playlistController.currentStep();
+        if (step1.slotId > 0) {
+            m_inputManager.setProgramSlot(step1.slotId);
+            auto pgmSrc = m_inputManager.programSource();
+            if (pgmSrc) {
+                pgmSrc->seekToSeconds(0.0);
+                pgmSrc->play();
+            }
+        }
+
+        m_playlistController.resetStepTimer();
+        statusBar()->showMessage("Running Global Broadcast Playlist Mode...");
+    }
+}
+
+void MainWindow::onPauseGlobalPlaylist() {
+    if (!m_playlistController.isActive()) return;
+
+    if (m_playlistController.isPaused()) {
+        m_playlistController.resume();
+        auto pgmSrc = m_inputManager.programSource();
+        if (pgmSrc) pgmSrc->play();
+        m_playlistPauseBtn->setText("⏸");
+        statusBar()->showMessage("Playlist Resumed.");
+    } else {
+        m_playlistController.pause();
+        auto pgmSrc = m_inputManager.programSource();
+        if (pgmSrc) pgmSrc->pause();
+        m_playlistPauseBtn->setText("▶");
+        statusBar()->showMessage("Playlist Paused.");
+    }
+}
+
+void MainWindow::onPlaylistPrevClicked() {
+    if (!m_playlistController.isActive()) return;
+    m_playlistController.prevStep();
+    advancePlaylistStep();
+    statusBar()->showMessage("Playlist: Jumped to Previous Track.");
+}
+
+void MainWindow::onPlaylistNextClicked() {
+    if (!m_playlistController.isActive()) return;
+    m_playlistController.nextStepManual();
+    advancePlaylistStep();
+    statusBar()->showMessage("Playlist: Jumped to Next Track.");
+}
+
+void MainWindow::advancePlaylistStep() {
+    auto currentStep = m_playlistController.currentStep();
+    int targetSlotId = currentStep.slotId;
+    if (targetSlotId <= 0) return;
+
+    int currentPgmId = m_inputManager.programSlotId();
+    if (targetSlotId == currentPgmId) return;
+
+    auto currentPgmSource = m_inputManager.programSource();
+
+    // Set target slot to PGM directly without altering PVW!
+    m_inputManager.setProgramSlot(targetSlotId);
+
+    auto newPgmSource = m_inputManager.programSource();
+    if (newPgmSource) {
+        newPgmSource->seekToSeconds(0.0);
+        newPgmSource->play();
+    }
+
+    float duration = (currentStep.transitionType == "CUT") ? 1.0f : m_fadeDurationCombo->currentData().toFloat();
+    if (duration <= 0.0f) duration = 500.0f;
+
+    if (m_pgmWindow && newPgmSource) {
+        if (currentPgmSource) {
+            m_pgmWindow->renderer()->startTransition(currentPgmSource, newPgmSource, duration);
+        }
+    }
+
+    if (m_ledOutputWindow && m_ledOutputWindow->directXWindow() && newPgmSource) {
+        if (currentPgmSource) {
+            m_ledOutputWindow->directXWindow()->renderer()->startTransition(currentPgmSource, newPgmSource, duration);
+        }
+    }
+
+    if (currentPgmSource && currentPgmSource != newPgmSource) {
+        currentPgmSource->pause();
+    }
+
+    m_playlistController.resetStepTimer();
+}
+
+void MainWindow::onConfigGlobalPlaylist() {
+    GlobalPlaylistDialog dlg(m_inputManager, m_playlistController, this);
+    dlg.exec();
+}
+
 void MainWindow::onQuickPlayClicked() {
+    stopGlobalPlaylistUI();
     auto pvwSource = m_inputManager.previewSource();
     if (pvwSource) {
         pvwSource->play();
     }
-    onCutClicked();
+    onCutClicked(true);
 }
 
 void MainWindow::onFTBClicked() {
@@ -1080,6 +1302,10 @@ void MainWindow::onFTBClicked() {
 }
 
 void MainWindow::onTBarSliderMoved(int value) {
+    if (value > 0) {
+        stopGlobalPlaylistUI();
+    }
+
     float progress = static_cast<float>(value) / 1000.0f;
     auto pvwSource = m_inputManager.previewSource();
     auto pgmSource = m_inputManager.programSource();
@@ -1150,7 +1376,11 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
     QMainWindow::keyPressEvent(event);
 }
 
-void MainWindow::onCutClicked() {
+void MainWindow::onCutClicked(bool isManualUserAction) {
+    if (isManualUserAction) {
+        stopGlobalPlaylistUI();
+    }
+
     int pvwId = m_inputManager.previewSlotId();
     int pgmId = m_inputManager.programSlotId();
 
@@ -1193,7 +1423,11 @@ void MainWindow::onCutClicked() {
     statusBar()->showMessage(QString("CUT Switch: Input #%1 is now LIVE").arg(pvwId));
 }
 
-void MainWindow::onFadeClicked() {
+void MainWindow::onFadeClicked(bool isManualUserAction) {
+    if (isManualUserAction) {
+        stopGlobalPlaylistUI();
+    }
+
     int pvwId = m_inputManager.previewSlotId();
     int pgmId = m_inputManager.programSlotId();
 
@@ -1336,6 +1570,19 @@ void MainWindow::onPgmSeekSliderSliderMoved(int value) {
 }
 
 void MainWindow::updatePlaybackStatus() {
+    // 0. Check Global Broadcast Playlist Advancement (Timer Loop Tick)
+    if (m_playlistController.isActive() && !m_playlistController.isPaused()) {
+        auto pgmSrc = m_inputManager.programSource();
+        double pgmPos = pgmSrc ? pgmSrc->positionSeconds() : 0.0;
+        double pgmDur = pgmSrc ? pgmSrc->durationSeconds() : 0.0;
+        bool pgmIsPlaying = pgmSrc ? pgmSrc->isPlaying() : false;
+        int pgmId = m_inputManager.programSlotId();
+
+        if (m_playlistController.checkAdvance(pgmPos, pgmDur, pgmId, pgmIsPlaying)) {
+            advancePlaylistStep();
+        }
+    }
+
     // 1. PREVIEW (PVW) Status
     auto pvwSource = m_inputManager.previewSource();
     if (!pvwSource || pvwSource->durationSeconds() <= 0.0) {

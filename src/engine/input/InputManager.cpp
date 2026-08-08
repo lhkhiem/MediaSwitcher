@@ -1,7 +1,6 @@
 #include "InputManager.h"
 #include "ColorBarsSource.h"
 #include "FileSource.h"
-#include "PlaylistSource.h"
 #include "engine/decoder/FFmpegDecoder.h"
 #include "common/logger/Logger.h"
 #include <filesystem>
@@ -100,29 +99,6 @@ int InputManager::addFileSlot(const std::string& filePath, const std::string& na
     m_previewSlotId = newId;
 
     LOG_INFO("InputManager: Added video slot #{} '{}'", newId, slot.name);
-
-    if (m_onInputListChanged) m_onInputListChanged();
-    if (m_onPreviewChanged) m_onPreviewChanged();
-    return newId;
-}
-
-int InputManager::addPlaylistSlot(const std::string& name) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    InputSlot slot;
-    slot.id = m_nextId++;
-    slot.name = name.empty() ? ("Playlist " + std::to_string(slot.id)) : name;
-    slot.type = InputType::Playlist;
-
-    auto playlistSrc = std::make_shared<PlaylistSource>();
-    playlistSrc->open();
-    slot.source = playlistSrc;
-
-    m_slots.push_back(slot);
-    int newId = slot.id;
-
-    m_previewSlotId = newId;
-
-    LOG_INFO("InputManager: Added playlist slot #{} '{}'", newId, slot.name);
 
     if (m_onInputListChanged) m_onInputListChanged();
     if (m_onPreviewChanged) m_onPreviewChanged();

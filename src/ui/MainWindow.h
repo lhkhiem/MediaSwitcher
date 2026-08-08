@@ -11,16 +11,15 @@
 #include "engine/input/GlobalPlaylistController.h"
 #include "FullscreenLEDWindow.h"
 #include "InputSlotWidget.h"
+#include "AudioMeterWidget.h"
 #include <memory>
 
 #include <QCloseEvent>
-
 #include <QSlider>
 #include <QTimer>
+#include <QLineEdit>
 
 class DirectXWindow;
-
-#include <QLineEdit>
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -63,6 +62,9 @@ private slots:
     void onPlaylistNextClicked();
     void onConfigGlobalPlaylist();
 
+    void onMasterVolumeChanged(int value);
+    void onMuteToggled();
+
 private:
     void setupUi();
     void populateScreenSelector();
@@ -84,6 +86,11 @@ private:
     QPushButton* m_ftbBtn{nullptr};
     QSlider* m_tbarSlider{nullptr};
     bool m_isFtbActive{false};
+
+    AudioMeterWidget* m_audioMeterWidget{nullptr};
+    QSlider* m_masterVolumeSlider{nullptr};
+    QPushButton* m_muteBtn{nullptr};
+    QLabel* m_volumeLabel{nullptr};
 
     QPushButton* m_playlistToggleBtn{nullptr};
     QPushButton* m_playlistPrevBtn{nullptr};

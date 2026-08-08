@@ -2,7 +2,7 @@
 find_package(Qt6 COMPONENTS Core Gui Widgets REQUIRED)
 
 # DirectX 11 Libraries
-set(DIRECTX_LIBRARIES d3d11.lib dxgi.lib d3dcompiler.lib)
+set(DIRECTX_LIBRARIES d3d11.lib dxgi.lib d3dcompiler.lib xaudio2.lib ole32.lib)
 
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
@@ -26,6 +26,8 @@ set(SOURCES
     ui/InputSlotWidget.h
     ui/GlobalPlaylistDialog.cpp
     ui/GlobalPlaylistDialog.h
+    ui/AudioMeterWidget.cpp
+    ui/AudioMeterWidget.h
     engine/renderer/DirectXWindow.cpp
     engine/renderer/DirectXWindow.h
     engine/renderer/Renderer.cpp
@@ -46,11 +48,9 @@ set(SOURCES
     engine/input/GlobalPlaylistController.h
     engine/decoder/FFmpegDecoder.cpp
     engine/decoder/FFmpegDecoder.h
+    engine/audio/AudioEngine.cpp
+    engine/audio/AudioEngine.h
 )
-
-# Qt UI Files (if any)
-# set(UI_FILES ui/MainWindow.ui)
-# qt6_wrap_ui(UI_SOURCES ${UI_FILES})
 
 # MOC
 set(CMAKE_AUTOMOC ON)
@@ -66,6 +66,7 @@ set(FFMPEG_LIBRARIES
     avformat.lib
     avutil.lib
     swscale.lib
+    swresample.lib
 )
 
 # Link libraries
@@ -86,8 +87,14 @@ add_custom_command(TARGET MediaSwitcher POST_BUILD
     $<TARGET_FILE_DIR:MediaSwitcher>
 )
 
+# Deploy Qt6 DLLs to target executable post-build
+get_target_property(QT_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
+get_filename_component(QT_BIN_DIR "${QT_QMAKE_EXECUTABLE}" DIRECTORY)
+add_custom_command(TARGET MediaSwitcher POST_BUILD
+    COMMAND "${QT_BIN_DIR}/windeployqt.exe" --no-compiler-runtime "$<TARGET_FILE:MediaSwitcher>"
+)
+
 # Compile options
 if(MSVC)
     target_compile_options(MediaSwitcher PRIVATE /W4)
 endif()
-

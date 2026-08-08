@@ -5,11 +5,11 @@
 #include <QPaintEvent>
 #include <QMouseEvent>
 #include <QTimer>
+#include <QSlider>
+#include <QPushButton>
 #include "engine/input/InputSlot.h"
 #include "engine/input/IMediaSource.h"
 #include <memory>
-
-#include <QPushButton>
 
 class InputSlotWidget : public QWidget {
     Q_OBJECT
@@ -38,5 +38,7 @@ private:
     bool m_isPgm{false};
     QTimer* m_refreshTimer{nullptr};
     QPushButton* m_playBtn{nullptr};
+    QPushButton* m_audioBtn{nullptr};
+    QSlider* m_volSlider{nullptr};
     QPushButton* m_closeBtn{nullptr};
 };

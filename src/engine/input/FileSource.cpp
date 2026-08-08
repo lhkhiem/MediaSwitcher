@@ -1,6 +1,8 @@
 #include "FileSource.h"
+#include "engine/audio/AudioEngine.h"
 #include "common/logger/Logger.h"
 #include <chrono>
+#include <algorithm>
 
 FileSource::FileSource(const std::string& filePath)
     : m_filePath(filePath)
@@ -46,6 +48,10 @@ void FileSource::close() {
         m_currentFrame.reset();
         m_lastValidFrame.reset();
     }
+    {
+        std::lock_guard<std::mutex> lock(m_audioMutex);
+        m_audioBuffer.clear();
+    }
 
     m_opened = false;
     LOG_INFO("FileSource: Closed '{}'.", m_filePath);
@@ -70,6 +76,10 @@ double FileSource::positionSeconds() const {
 void FileSource::seekToSeconds(double seconds) {
     if (seconds < 0.0) seconds = 0.0;
     m_seekTarget.store(seconds);
+    {
+        std::lock_guard<std::mutex> lock(m_audioMutex);
+        m_audioBuffer.clear();
+    }
 }
 
 std::shared_ptr<Frame> FileSource::getFrame() {
@@ -82,6 +92,23 @@ std::shared_ptr<Frame> FileSource::getFrame() {
     return m_lastValidFrame;
 }
 
+size_t FileSource::getAudioSamples(float* buffer, size_t maxSamples) {
+    if (!m_opened || !buffer || maxSamples == 0) return 0;
+
+    std::lock_guard<std::mutex> lock(m_audioMutex);
+    if (m_audioBuffer.empty()) return 0;
+
+    size_t count = (std::min)(maxSamples, m_audioBuffer.size());
+    float gain = m_muted.load() ? 0.0f : m_volume.load();
+
+    for (size_t i = 0; i < count; ++i) {
+        buffer[i] = m_audioBuffer[i] * gain;
+    }
+    m_audioBuffer.erase(m_audioBuffer.begin(), m_audioBuffer.begin() + count);
+
+    return count;
+}
+
 void FileSource::decodeWorkerLoop() {
     double fps = m_decoder.fps();
     if (fps <= 0.0) fps = 30.0;
@@ -92,6 +119,7 @@ void FileSource::decodeWorkerLoop() {
         double seekSec = m_seekTarget.exchange(-1.0);
         if (seekSec >= 0.0) {
             m_decoder.seekToSeconds(seekSec);
+            m_clockInitialized = false;
             auto frame = m_framePool.acquire(m_decoder.width(), m_decoder.height(), PixelFormat::RGBA32);
             if (m_decoder.decodeNextFrame(*frame)) {
                 std::lock_guard<std::mutex> lock(m_frameMutex);
@@ -101,6 +129,7 @@ void FileSource::decodeWorkerLoop() {
         }
 
         if (!m_playing) {
+            m_clockInitialized = false;
             // Decode initial frame 0 once if not decoded yet
             bool hasFrame = false;
             {
@@ -119,21 +148,68 @@ void FileSource::decodeWorkerLoop() {
             continue;
         }
 
+        // Decode audio samples using demuxer queue (Rate-throttled to 0.5s max buffer)
+        if (m_decoder.hasAudio()) {
+            bool needMoreAudio = false;
+            {
+                std::lock_guard<std::mutex> lock(m_audioMutex);
+                needMoreAudio = (m_audioBuffer.size() < 48000); // 0.5s max buffer
+            }
+
+            if (needMoreAudio) {
+                std::vector<float> audioPcm;
+                m_decoder.decodeAudioSamples(audioPcm);
+                if (!audioPcm.empty()) {
+                    std::lock_guard<std::mutex> lock(m_audioMutex);
+                    m_audioBuffer.insert(m_audioBuffer.end(), audioPcm.begin(), audioPcm.end());
+                }
+            }
+        }
+
+        // Decode video frame
         auto frame = m_framePool.acquire(m_decoder.width(), m_decoder.height(), PixelFormat::RGBA32);
-        if (m_decoder.decodeNextFrame(*frame)) {
+        bool gotVideo = m_decoder.decodeNextFrame(*frame);
+
+        if (gotVideo) {
             {
                 std::lock_guard<std::mutex> lock(m_frameMutex);
                 m_currentFrame = frame;
                 m_lastValidFrame = frame;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(frameDelayMs));
+
+            // High Precision Master Clock Pacing Algorithm (1.000x Speed Guarantee)
+            if (!m_clockInitialized) {
+                m_playbackStartTime = std::chrono::high_resolution_clock::now();
+                m_playbackStartPts = frame->pts();
+                m_clockInitialized = true;
+            }
+
+            double targetElapsed = frame->pts() - m_playbackStartPts;
+            auto now = std::chrono::high_resolution_clock::now();
+            double actualElapsed = std::chrono::duration<double>(now - m_playbackStartTime).count();
+            double diffSec = targetElapsed - actualElapsed;
+
+            if (diffSec > 0.0) {
+                // Video is ahead of real-world wall clock: sleep for exact difference
+                int sleepMs = (std::min)(static_cast<int>(diffSec * 1000.0), 100);
+                if (sleepMs > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+                }
+            } else if (diffSec < -0.1) {
+                // Video is slightly behind real-world clock: 1ms micro sleep
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(frameDelayMs));
+            }
         } else {
             // End of file
             if (m_loop) {
                 m_decoder.seekToBeginning();
+                m_clockInitialized = false;
                 std::this_thread::sleep_for(std::chrono::milliseconds(frameDelayMs));
             } else {
                 m_playing = false;
+                m_clockInitialized = false;
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
         }

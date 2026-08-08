@@ -9,14 +9,14 @@ enum class PixelFormat {
     NV12   = 2
 };
 
-// Frame structure encapsulating pixel data
+// Frame structure encapsulating pixel data and timestamp (PTS)
 class Frame {
 public:
-    Frame(int width, int height, PixelFormat format, int64_t timestamp = 0)
+    Frame(int width, int height, PixelFormat format, double ptsInSeconds = 0.0)
         : m_width(width)
         , m_height(height)
         , m_pixelFormat(format)
-        , m_timestamp(timestamp)
+        , m_pts(ptsInSeconds)
         , m_stride(width * 4)
     {
         m_data.resize(m_stride * height, 0);
@@ -28,7 +28,8 @@ public:
     int width() const { return m_width; }
     int height() const { return m_height; }
     PixelFormat pixelFormat() const { return m_pixelFormat; }
-    int64_t timestamp() const { return m_timestamp; }
+    double pts() const { return m_pts; }
+    void setPts(double ptsInSeconds) { m_pts = ptsInSeconds; }
     int stride() const { return m_stride; }
 
     uint8_t* data() { return m_data.data(); }
@@ -47,8 +48,7 @@ private:
     int m_width;
     int m_height;
     PixelFormat m_pixelFormat;
-    int64_t m_timestamp;
+    double m_pts{0.0};
     int m_stride;
     std::vector<uint8_t> m_data;
 };
-

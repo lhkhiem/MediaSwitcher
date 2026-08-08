@@ -7,6 +7,8 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <vector>
+#include <chrono>
 
 class FileSource : public IMediaSource {
 public:
@@ -17,6 +19,12 @@ public:
     void close() override;
 
     std::shared_ptr<Frame> getFrame() override;
+    size_t getAudioSamples(float* buffer, size_t maxSamples) override;
+
+    void setVolume(float vol) override { m_volume.store(vol); }
+    float volume() const override { return m_volume.load(); }
+    void setMuted(bool mute) override { m_muted.store(mute); }
+    bool isMuted() const override { return m_muted.load(); }
 
     double durationSeconds() const override;
     double positionSeconds() const override;
@@ -39,6 +47,8 @@ private:
     std::atomic<bool> m_playing{false};
     std::atomic<bool> m_loop{true};
     std::atomic<double> m_seekTarget{-1.0};
+    std::atomic<float> m_volume{1.0f};
+    std::atomic<bool> m_muted{false};
 
     FFmpegDecoder m_decoder;
     FramePool m_framePool;
@@ -49,4 +59,12 @@ private:
     std::mutex m_frameMutex;
     std::shared_ptr<Frame> m_currentFrame;
     std::shared_ptr<Frame> m_lastValidFrame;
+
+    std::mutex m_audioMutex;
+    std::vector<float> m_audioBuffer;
+
+    // High resolution master wall clock for 1.000x exact AV sync
+    std::chrono::high_resolution_clock::time_point m_playbackStartTime;
+    double m_playbackStartPts{0.0};
+    bool m_clockInitialized{false};
 };

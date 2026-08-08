@@ -23,6 +23,7 @@ public:
     bool open() override;
     void close() override;
     std::shared_ptr<Frame> getFrame() override;
+    size_t getAudioSamples(float* buffer, size_t maxSamples) override;
 
     double durationSeconds() const override;
     double positionSeconds() const override;

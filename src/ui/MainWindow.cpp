@@ -3,7 +3,9 @@
 #include "ui/FullscreenLEDWindow.h"
 #include "ui/InputSlotWidget.h"
 #include "ui/GlobalPlaylistDialog.h"
+#include "ui/AudioMeterWidget.h"
 #include "engine/input/GlobalPlaylistController.h"
+#include "engine/audio/AudioEngine.h"
 #include "common/logger/Logger.h"
 
 #include <QToolBar>
@@ -20,6 +22,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     LOG_INFO("MainWindow created.");
+    AudioEngine::instance().initialize();
     setupUi();
 
     m_inputManager.setOnInputListChanged([this]() {
@@ -52,6 +55,7 @@ MainWindow::MainWindow(QWidget *parent)
 }
 
 MainWindow::~MainWindow() {
+    AudioEngine::instance().shutdown();
     if (m_ledOutputWindow) {
         m_ledOutputWindow->close();
         delete m_ledOutputWindow;
@@ -61,6 +65,7 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
+    AudioEngine::instance().shutdown();
     if (m_ledOutputWindow) {
         m_ledOutputWindow->close();
         delete m_ledOutputWindow;
@@ -546,7 +551,66 @@ void MainWindow::setupUi() {
     connect(m_playlistConfigBtn, &QPushButton::clicked, this, &MainWindow::onConfigGlobalPlaylist);
     centerControlLayout->addWidget(m_playlistConfigBtn);
 
-    topLayout->addLayout(centerControlLayout, 1);
+    topLayout->addLayout(centerControlLayout, 0);
+
+    // Dedicated MASTER AUDIO Mixer Column
+    QGroupBox* audioGroup = new QGroupBox("AUDIO", centralWidget);
+    audioGroup->setStyleSheet(R"(
+        QGroupBox {
+            color: #29B6F6; font-weight: bold; font-size: 11px;
+            border: 2px solid #0288D1; border-radius: 6px; margin-top: 6px; padding-top: 10px;
+            background-color: #12131C;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin; subcontrol-position: top center;
+            padding: 2px 6px; background-color: #0288D1; color: #FFFFFF; border-radius: 3px;
+        }
+    )");
+    QVBoxLayout* audioColLayout = new QVBoxLayout(audioGroup);
+    audioColLayout->setContentsMargins(6, 12, 6, 6);
+    audioColLayout->setSpacing(6);
+    audioColLayout->setAlignment(Qt::AlignCenter);
+
+    m_audioMeterWidget = new AudioMeterWidget(audioGroup);
+    m_audioMeterWidget->setFixedHeight(120);
+    audioColLayout->addWidget(m_audioMeterWidget, 0, Qt::AlignCenter);
+
+    m_volumeLabel = new QLabel("100%", audioGroup);
+    m_volumeLabel->setStyleSheet("color: #29B6F6; font-size: 11px; font-weight: bold;");
+    m_volumeLabel->setAlignment(Qt::AlignCenter);
+    audioColLayout->addWidget(m_volumeLabel);
+
+    m_masterVolumeSlider = new QSlider(Qt::Vertical, audioGroup);
+    m_masterVolumeSlider->setRange(0, 100);
+    m_masterVolumeSlider->setValue(100);
+    m_masterVolumeSlider->setFixedHeight(85);
+    m_masterVolumeSlider->setCursor(Qt::PointingHandCursor);
+    m_masterVolumeSlider->setToolTip("Master Audio Volume Fader");
+    m_masterVolumeSlider->setStyleSheet(R"(
+        QSlider::groove:vertical { width: 8px; background: #1C1E2A; border-radius: 4px; }
+        QSlider::sub-page:vertical { background: #29B6F6; border-radius: 4px; }
+        QSlider::handle:vertical {
+            background: #FFFFFF; border: 1px solid #0288D1; height: 14px;
+            margin-left: -4px; margin-right: -4px; border-radius: 4px;
+        }
+    )");
+    connect(m_masterVolumeSlider, &QSlider::valueChanged, this, &MainWindow::onMasterVolumeChanged);
+    audioColLayout->addWidget(m_masterVolumeSlider, 0, Qt::AlignCenter);
+
+    m_muteBtn = new QPushButton("🔊 MUTE", audioGroup);
+    m_muteBtn->setFixedSize(64, 24);
+    m_muteBtn->setToolTip("Mute / Unmute Audio");
+    m_muteBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #388E3C; color: #FFFFFF; font-weight: bold; font-size: 10px;
+            border: 1px solid #4CAF50; border-radius: 3px;
+        }
+        QPushButton:hover { background-color: #4CAF50; }
+    )");
+    connect(m_muteBtn, &QPushButton::clicked, this, &MainWindow::onMuteToggled);
+    audioColLayout->addWidget(m_muteBtn, 0, Qt::AlignCenter);
+
+    topLayout->addWidget(audioGroup, 0);
 
     // 3. PROGRAM PANEL (PGM)
     QGroupBox* pgmGroup = new QGroupBox("PROGRAM (PGM) - LIVE", centralWidget);
@@ -1260,6 +1324,7 @@ void MainWindow::onQuickPlayClicked() {
 
 void MainWindow::onFTBClicked() {
     m_isFtbActive = !m_isFtbActive;
+    AudioEngine::instance().setFtbAlpha(m_isFtbActive ? 0.0f : 1.0f);
 
     if (m_pgmWindow && m_pgmWindow->renderer()) {
         m_pgmWindow->renderer()->setFTB(m_isFtbActive, 500.0f);
@@ -1727,5 +1792,53 @@ void MainWindow::updatePlaybackStatus() {
                 QPushButton:hover { background-color: #3E4154; color: #FFFFFF; }
             )");
         }
+    }
+
+    // 3. Audio Pumping from Program Source into AudioEngine (Rate-Monitored 1.000x Flow)
+    if (pgmSource && pgmSource->isPlaying()) {
+        size_t currentRingSize = AudioEngine::instance().getRingBufferSize();
+        // Maintain AudioEngine ring buffer depth at ~19,200 floats (0.2s of audio @ 48kHz stereo)
+        if (currentRingSize < 19200) {
+            size_t neededFloats = 19200 - currentRingSize;
+            float pcmBuffer[9600];
+            size_t totalPumped = 0;
+            while (totalPumped < neededFloats) {
+                size_t toRead = (std::min)(neededFloats - totalPumped, static_cast<size_t>(9600));
+                size_t count = pgmSource->getAudioSamples(pcmBuffer, toRead);
+                if (count == 0) break;
+                AudioEngine::instance().submitAudioSamples(pcmBuffer, count / 2);
+                totalPumped += count;
+            }
+        }
+    }
+}
+
+void MainWindow::onMasterVolumeChanged(int value) {
+    float vol = static_cast<float>(value) / 100.0f;
+    AudioEngine::instance().setVolume(vol);
+    if (m_volumeLabel) {
+        m_volumeLabel->setText(QString("%1%").arg(value));
+    }
+}
+
+void MainWindow::onMuteToggled() {
+    bool isMuted = AudioEngine::instance().isMuted();
+    bool newMuted = !isMuted;
+    AudioEngine::instance().setMuted(newMuted);
+    if (m_muteBtn) {
+        m_muteBtn->setText(newMuted ? "🔇" : "🔊");
+        m_muteBtn->setStyleSheet(newMuted ? R"(
+            QPushButton {
+                background-color: #D32F2F; color: #FFFFFF; font-weight: bold; font-size: 11px;
+                border: 1px solid #E53935; border-radius: 3px;
+            }
+            QPushButton:hover { background-color: #E53935; }
+        )" : R"(
+            QPushButton {
+                background-color: #388E3C; color: #FFFFFF; font-weight: bold; font-size: 11px;
+                border: 1px solid #4CAF50; border-radius: 3px;
+            }
+            QPushButton:hover { background-color: #4CAF50; }
+        )");
     }
 }

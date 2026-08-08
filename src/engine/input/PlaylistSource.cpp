@@ -100,6 +100,14 @@ std::shared_ptr<Frame> PlaylistSource::getFrame() {
     return frame;
 }
 
+size_t PlaylistSource::getAudioSamples(float* buffer, size_t maxSamples) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_activeSource) {
+        return m_activeSource->getAudioSamples(buffer, maxSamples);
+    }
+    return 0;
+}
+
 double PlaylistSource::durationSeconds() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_activeSource) return m_activeSource->durationSeconds();

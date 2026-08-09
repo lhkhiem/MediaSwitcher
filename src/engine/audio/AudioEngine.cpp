@@ -104,12 +104,8 @@ void AudioEngine::submitAudioSamples(const float* samples, size_t numFrames) {
 
     std::lock_guard<std::mutex> lock(m_bufferMutex);
     
-    // Cap ring buffer to 2 seconds (192,000 floats) to prevent memory growth.
-    // If full, do not insert extra samples (do NOT erase unplayed audio from the front!).
-    if (m_ringBuffer.size() + numFloats > 192000) {
-        return;
-    }
-
+    // Always insert submitted samples into ring buffer — NEVER drop audio samples!
+    // Sample dropping here was the root cause of missing words/lyrics in playback.
     m_ringBuffer.insert(m_ringBuffer.end(), samples, samples + numFloats);
     m_cv.notify_one();
 }
@@ -177,8 +173,8 @@ void AudioEngine::bufferFeedLoop() {
         XAUDIO2_VOICE_STATE state;
         m_sourceVoice->GetState(&state);
 
-        // Keep 4-5 buffers queued at all times to prevent stuttering
-        if (state.BuffersQueued < 4) {
+        // Keep 4-5 buffers queued at all times to prevent XAudio2 hardware starvation
+        while (m_running && m_sourceVoice && state.BuffersQueued < 4) {
             std::vector<float> chunk(960, 0.0f); // 480 frames stereo = 960 floats (10ms)
             bool hasData = false;
 
@@ -192,40 +188,39 @@ void AudioEngine::bufferFeedLoop() {
                 }
             }
 
-            if (hasData) {
-                // Apply Master Volume, Mute, and FTB Alpha
-                float masterVol = m_muted.load() ? 0.0f : m_volume.load();
-                float ftbAlpha = m_ftbAlpha.load();
-                float effGain = masterVol * ftbAlpha;
+            // Apply Master Volume, Mute, and FTB Alpha
+            float masterVol = m_muted.load() ? 0.0f : m_volume.load();
+            float ftbAlpha = m_ftbAlpha.load();
+            float effGain = masterVol * ftbAlpha;
 
-                float maxL = 0.0f;
-                float maxR = 0.0f;
+            float maxL = 0.0f;
+            float maxR = 0.0f;
 
-                for (size_t i = 0; i < chunk.size(); i += 2) {
-                    chunk[i] *= effGain;     // Left
-                    chunk[i + 1] *= effGain; // Right
+            for (size_t i = 0; i < chunk.size(); i += 2) {
+                chunk[i] *= effGain;     // Left
+                chunk[i + 1] *= effGain; // Right
 
-                    maxL = (std::max)(maxL, std::abs(chunk[i]));
-                    maxR = (std::max)(maxR, std::abs(chunk[i + 1]));
-                }
-
-                // Smooth decay peak meter calculation
-                float prevL = m_leftPeak.load();
-                float prevR = m_rightPeak.load();
-                m_leftPeak.store((std::max)(maxL, prevL * 0.88f));
-                m_rightPeak.store((std::max)(maxR, prevR * 0.88f));
-
-                auto& buf = m_audioBuffers[m_currentBufferIndex];
-                memcpy(buf.data(), chunk.data(), BUFFER_SIZE_BYTES);
-
-                XAUDIO2_BUFFER xbuf = {};
-                xbuf.AudioBytes = static_cast<UINT32>(BUFFER_SIZE_BYTES);
-                xbuf.pAudioData = buf.data();
-                xbuf.pContext = nullptr;
-
-                m_sourceVoice->SubmitSourceBuffer(&xbuf);
-                m_currentBufferIndex = (m_currentBufferIndex + 1) % NUM_BUFFERS;
+                maxL = (std::max)(maxL, std::abs(chunk[i]));
+                maxR = (std::max)(maxR, std::abs(chunk[i + 1]));
             }
+
+            // Smooth decay peak meter calculation
+            float prevL = m_leftPeak.load();
+            float prevR = m_rightPeak.load();
+            m_leftPeak.store((std::max)(maxL, prevL * 0.88f));
+            m_rightPeak.store((std::max)(maxR, prevR * 0.88f));
+
+            auto& buf = m_audioBuffers[m_currentBufferIndex];
+            memcpy(buf.data(), chunk.data(), BUFFER_SIZE_BYTES);
+
+            XAUDIO2_BUFFER xbuf = {};
+            xbuf.AudioBytes = static_cast<UINT32>(BUFFER_SIZE_BYTES);
+            xbuf.pAudioData = buf.data();
+            xbuf.pContext = nullptr;
+
+            m_sourceVoice->SubmitSourceBuffer(&xbuf);
+            m_currentBufferIndex = (m_currentBufferIndex + 1) % NUM_BUFFERS;
+            state.BuffersQueued++;
         }
 
         std::unique_lock<std::mutex> lock(m_bufferMutex);

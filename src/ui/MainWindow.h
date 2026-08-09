@@ -18,6 +18,8 @@
 #include <QSlider>
 #include <QTimer>
 #include <QLineEdit>
+#include <thread>
+#include <atomic>
 
 class DirectXWindow;
 

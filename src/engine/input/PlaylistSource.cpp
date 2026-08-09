@@ -83,9 +83,11 @@ std::shared_ptr<Frame> PlaylistSource::getFrame() {
         if (m_playing) {
             double pos = m_activeSource->positionSeconds();
             double dur = m_activeSource->durationSeconds();
-            if (dur > 0.5 && pos >= dur - 0.2) {
+            if (dur > 0.5 && pos >= dur - 0.05) {
                 if (m_loopTrack) {
-                    m_activeSource->seekToSeconds(0);
+                    // Use loopToBeginning() — drains audio codec tail before seeking,
+                    // and does NOT clear m_audioBuffer, so pre-buffered audio plays out.
+                    m_activeSource->loopToBeginning();
                 } else if (m_autoAdvance) {
                     m_currentIndex++;
                     if (m_currentIndex >= m_tracks.size()) {
@@ -100,13 +102,6 @@ std::shared_ptr<Frame> PlaylistSource::getFrame() {
     return frame;
 }
 
-size_t PlaylistSource::getAudioSamples(float* buffer, size_t maxSamples) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_activeSource) {
-        return m_activeSource->getAudioSamples(buffer, maxSamples);
-    }
-    return 0;
-}
 
 double PlaylistSource::durationSeconds() const {
     std::lock_guard<std::mutex> lock(m_mutex);

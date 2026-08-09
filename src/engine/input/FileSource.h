@@ -3,11 +3,13 @@
 #include "IMediaSource.h"
 #include "engine/decoder/FFmpegDecoder.h"
 #include "engine/frame/FramePool.h"
+#include <QMediaPlayer>
+#include <QAudioOutput>
+#include <QString>
 #include <string>
 #include <thread>
 #include <atomic>
 #include <mutex>
-#include <vector>
 #include <chrono>
 
 class FileSource : public IMediaSource {
@@ -19,16 +21,16 @@ public:
     void close() override;
 
     std::shared_ptr<Frame> getFrame() override;
-    size_t getAudioSamples(float* buffer, size_t maxSamples) override;
 
-    void setVolume(float vol) override { m_volume.store(vol); }
+    void setVolume(float vol) override;
     float volume() const override { return m_volume.load(); }
-    void setMuted(bool mute) override { m_muted.store(mute); }
+    void setMuted(bool mute) override;
     bool isMuted() const override { return m_muted.load(); }
 
     double durationSeconds() const override;
     double positionSeconds() const override;
     void seekToSeconds(double seconds) override;
+    void loopToBeginning() override;
 
     void setLoop(bool loop) override { m_loop = loop; }
     bool isLoop() const override { return m_loop; }
@@ -50,7 +52,7 @@ private:
     std::atomic<float> m_volume{1.0f};
     std::atomic<bool> m_muted{false};
 
-    FFmpegDecoder m_decoder;
+    FFmpegDecoder m_decoder;   // Video decode only
     FramePool m_framePool;
 
     std::thread m_workerThread;
@@ -60,10 +62,11 @@ private:
     std::shared_ptr<Frame> m_currentFrame;
     std::shared_ptr<Frame> m_lastValidFrame;
 
-    std::mutex m_audioMutex;
-    std::vector<float> m_audioBuffer;
+    // Qt Multimedia — handles audio playback completely (codec, buffer, output)
+    QMediaPlayer* m_audioPlayer{nullptr};
+    QAudioOutput* m_audioOutput{nullptr};
 
-    // High resolution master wall clock for 1.000x exact AV sync
+    // High resolution master wall clock for video frame pacing
     std::chrono::high_resolution_clock::time_point m_playbackStartTime;
     double m_playbackStartPts{0.0};
     bool m_clockInitialized{false};

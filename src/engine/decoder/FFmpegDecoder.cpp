@@ -3,56 +3,88 @@
 #include <algorithm>
 
 FFmpegDecoder::FFmpegDecoder() {
-    m_avFrame = av_frame_alloc();
+    m_avFrame   = av_frame_alloc();
     m_audioFrame = av_frame_alloc();
-    m_rgbaFrame = av_frame_alloc();
-    m_avPacket = av_packet_alloc();
+    m_rgbaFrame  = av_frame_alloc();
+    m_avPacket  = av_packet_alloc();
 }
 
 FFmpegDecoder::~FFmpegDecoder() {
     close();
-    if (m_avFrame) av_frame_free(&m_avFrame);
+    if (m_avFrame)    av_frame_free(&m_avFrame);
     if (m_audioFrame) av_frame_free(&m_audioFrame);
-    if (m_rgbaFrame) av_frame_free(&m_rgbaFrame);
-    if (m_avPacket) av_packet_free(&m_avPacket);
+    if (m_rgbaFrame)  av_frame_free(&m_rgbaFrame);
+    if (m_avPacket)   av_packet_free(&m_avPacket);
 }
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
 
 void FFmpegDecoder::clearPacketQueues() {
     std::lock_guard<std::mutex> lock(m_queueMutex);
-    for (auto pkt : m_videoPacketQueue) {
-        if (pkt) av_packet_free(&pkt);
-    }
+    for (auto pkt : m_videoPacketQueue) { if (pkt) av_packet_free(&pkt); }
     m_videoPacketQueue.clear();
-
-    for (auto pkt : m_audioPacketQueue) {
-        if (pkt) av_packet_free(&pkt);
-    }
+    for (auto pkt : m_audioPacketQueue) { if (pkt) av_packet_free(&pkt); }
     m_audioPacketQueue.clear();
 }
 
 void FFmpegDecoder::readPackets(size_t maxCount) {
-    if (!m_isOpen || !m_formatContext) return;
-
-    std::lock_guard<std::mutex> lock(m_queueMutex);
-    if (m_videoPacketQueue.size() >= 300 && m_audioPacketQueue.size() >= 500) return;
+    if (!m_isOpen || !m_formatContext || m_atFormatEof) return;
 
     size_t readCount = 0;
     while (m_isOpen && readCount < maxCount) {
-        if (av_read_frame(m_formatContext, m_avPacket) >= 0) {
+        // Only stop reading when the VIDEO queue is full.
+        // Audio queue is allowed to grow freely — audio packets are small (~1-4KB each)
+        // and we MUST NOT block video reads when audio is merely buffering ahead.
+        // Blocking on audioFull was the root cause of false mid-song EOF detection.
+        {
+            std::lock_guard<std::mutex> lock(m_queueMutex);
+            bool videoFull = (m_videoStreamIndex >= 0 && m_videoPacketQueue.size() >= 100);
+            if (videoFull) break;
+        }
+
+        int ret = av_read_frame(m_formatContext, m_avPacket);
+        if (ret >= 0) {
+            std::lock_guard<std::mutex> lock(m_queueMutex);
             if (m_avPacket->stream_index == m_videoStreamIndex) {
-                AVPacket* pkt = av_packet_clone(m_avPacket);
-                m_videoPacketQueue.push_back(pkt);
+                m_videoPacketQueue.push_back(av_packet_clone(m_avPacket));
             } else if (m_avPacket->stream_index == m_audioStreamIndex) {
-                AVPacket* pkt = av_packet_clone(m_avPacket);
-                m_audioPacketQueue.push_back(pkt);
+                m_audioPacketQueue.push_back(av_packet_clone(m_avPacket));
             }
             av_packet_unref(m_avPacket);
-            readCount++;
+            ++readCount;
         } else {
+            m_atFormatEof = true;   // Format context reached true EOF
             break;
         }
     }
 }
+
+// Helper: resample one audio frame and append PCM to outPcmBuffer
+static bool resampleFrame(SwrContext* swr, AVFrame* frame,
+                           std::vector<float>& outPcmBuffer)
+{
+    int outSamples = swr_get_out_samples(swr, frame->nb_samples);
+    if (outSamples <= 0) return false;
+
+    std::vector<float> resampled(static_cast<size_t>(outSamples) * 2);
+    uint8_t* outData[1] = { reinterpret_cast<uint8_t*>(resampled.data()) };
+
+    int converted = swr_convert(swr, outData, outSamples,
+                                (const uint8_t**)frame->data, frame->nb_samples);
+    if (converted > 0) {
+        outPcmBuffer.insert(outPcmBuffer.end(),
+                            resampled.begin(),
+                            resampled.begin() + static_cast<ptrdiff_t>(converted) * 2);
+        return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// open / close
+// ---------------------------------------------------------------------------
 
 bool FFmpegDecoder::open(const std::string& filePath) {
     close();
@@ -62,7 +94,6 @@ bool FFmpegDecoder::open(const std::string& filePath) {
         LOG_ERROR("FFmpeg: Cannot open file '{}'", filePath);
         return false;
     }
-
     if (avformat_find_stream_info(m_formatContext, nullptr) < 0) {
         LOG_ERROR("FFmpeg: Cannot find stream info for '{}'", filePath);
         close();
@@ -71,192 +102,187 @@ bool FFmpegDecoder::open(const std::string& filePath) {
 
     m_videoStreamIndex = -1;
     m_audioStreamIndex = -1;
-
-    for (unsigned int i = 0; i < m_formatContext->nb_streams; i++) {
-        auto codecType = m_formatContext->streams[i]->codecpar->codec_type;
-        if (codecType == AVMEDIA_TYPE_VIDEO && m_videoStreamIndex == -1) {
+    for (unsigned i = 0; i < m_formatContext->nb_streams; ++i) {
+        auto type = m_formatContext->streams[i]->codecpar->codec_type;
+        if (type == AVMEDIA_TYPE_VIDEO && m_videoStreamIndex == -1)
             m_videoStreamIndex = static_cast<int>(i);
-        } else if (codecType == AVMEDIA_TYPE_AUDIO && m_audioStreamIndex == -1) {
+        else if (type == AVMEDIA_TYPE_AUDIO && m_audioStreamIndex == -1)
             m_audioStreamIndex = static_cast<int>(i);
-        }
     }
-
     if (m_videoStreamIndex == -1 && m_audioStreamIndex == -1) {
-        LOG_ERROR("FFmpeg: Neither video nor audio stream found in '{}'", filePath);
+        LOG_ERROR("FFmpeg: No a/v stream found in '{}'", filePath);
         close();
         return false;
     }
 
-    // Setup Video Decoder
+    // Video decoder
     if (m_videoStreamIndex >= 0) {
-        AVCodecParameters* codecParams = m_formatContext->streams[m_videoStreamIndex]->codecpar;
-        const AVCodec* codec = avcodec_find_decoder(codecParams->codec_id);
+        auto* cp    = m_formatContext->streams[m_videoStreamIndex]->codecpar;
+        auto* codec = avcodec_find_decoder(cp->codec_id);
         if (codec) {
             m_codecContext = avcodec_alloc_context3(codec);
             if (m_codecContext) {
-                avcodec_parameters_to_context(m_codecContext, codecParams);
+                avcodec_parameters_to_context(m_codecContext, cp);
                 m_codecContext->thread_count = 4;
-                m_codecContext->thread_type = FF_THREAD_FRAME;
+                m_codecContext->thread_type  = FF_THREAD_FRAME;
                 if (avcodec_open2(m_codecContext, codec, nullptr) >= 0) {
-                    m_width = m_codecContext->width;
+                    m_width  = m_codecContext->width;
                     m_height = m_codecContext->height;
-                    AVRational streamFps = m_formatContext->streams[m_videoStreamIndex]->avg_frame_rate;
-                    if (streamFps.den > 0 && streamFps.num > 0) {
-                        m_fps = av_q2d(streamFps);
-                    } else {
-                        m_fps = 30.0;
-                    }
+                    AVRational fps = m_formatContext->streams[m_videoStreamIndex]->avg_frame_rate;
+                    m_fps = (fps.den > 0 && fps.num > 0) ? av_q2d(fps) : 30.0;
                 }
             }
         }
     }
 
-    // Setup Audio Decoder & Resampler
+    // Audio decoder + resampler
     if (m_audioStreamIndex >= 0) {
-        AVCodecParameters* audioParams = m_formatContext->streams[m_audioStreamIndex]->codecpar;
-        const AVCodec* audioCodec = avcodec_find_decoder(audioParams->codec_id);
-        if (audioCodec) {
-            m_audioCodecContext = avcodec_alloc_context3(audioCodec);
+        auto* ap    = m_formatContext->streams[m_audioStreamIndex]->codecpar;
+        auto* codec = avcodec_find_decoder(ap->codec_id);
+        if (codec) {
+            m_audioCodecContext = avcodec_alloc_context3(codec);
             if (m_audioCodecContext) {
-                avcodec_parameters_to_context(m_audioCodecContext, audioParams);
-                if (avcodec_open2(m_audioCodecContext, audioCodec, nullptr) >= 0) {
-                    // Setup SwrContext for 48kHz Stereo IEEE Float
+                avcodec_parameters_to_context(m_audioCodecContext, ap);
                     AVChannelLayout outLayout = AV_CHANNEL_LAYOUT_STEREO;
-                    swr_alloc_set_opts2(
-                        &m_swrContext,
-                        &outLayout,
-                        AV_SAMPLE_FMT_FLT,
-                        48000,
-                        &m_audioCodecContext->ch_layout,
-                        m_audioCodecContext->sample_fmt,
-                        m_audioCodecContext->sample_rate,
-                        0, nullptr
-                    );
-                    if (m_swrContext) {
-                        swr_init(m_swrContext);
+                    AVChannelLayout inLayout;
+                    if (m_audioCodecContext->ch_layout.nb_channels > 0) {
+                        av_channel_layout_copy(&inLayout, &m_audioCodecContext->ch_layout);
+                    } else {
+                        av_channel_layout_default(&inLayout, m_audioCodecContext->ch_layout.nb_channels > 0 ? m_audioCodecContext->ch_layout.nb_channels : 2);
                     }
-                }
+
+                    swr_alloc_set_opts2(&m_swrContext,
+                                       &outLayout, AV_SAMPLE_FMT_FLT, 48000,
+                                       &inLayout,
+                                       m_audioCodecContext->sample_fmt,
+                                       m_audioCodecContext->sample_rate,
+                                       0, nullptr);
+                    av_channel_layout_uninit(&inLayout);
+                    if (m_swrContext) swr_init(m_swrContext);
             }
         }
     }
 
-    if (m_formatContext->duration != AV_NOPTS_VALUE) {
-        m_durationSeconds = static_cast<double>(m_formatContext->duration) / AV_TIME_BASE;
-    } else {
-        m_durationSeconds = 0.0;
-    }
+    m_durationSeconds = (m_formatContext->duration != AV_NOPTS_VALUE)
+        ? static_cast<double>(m_formatContext->duration) / AV_TIME_BASE
+        : 0.0;
     m_currentPositionSeconds = 0.0;
+    m_atFormatEof = false;
 
     m_isOpen = true;
-    LOG_INFO("FFmpeg: Successfully opened '{}' (Video: {}, Audio: {})", 
-             filePath, m_videoStreamIndex >= 0 ? "Yes" : "No", m_audioStreamIndex >= 0 ? "Yes" : "No");
+    LOG_INFO("FFmpeg: Opened '{}' (video:{} audio:{})", filePath,
+             m_videoStreamIndex >= 0 ? "yes" : "no",
+             m_audioStreamIndex >= 0 ? "yes" : "no");
     return true;
 }
+
+void FFmpegDecoder::close() {
+    m_isOpen = false;
+    m_atFormatEof = false;
+    clearPacketQueues();
+
+    if (m_swsContext)       { sws_freeContext(m_swsContext); m_swsContext = nullptr; }
+    if (m_swrContext)       { swr_free(&m_swrContext); }
+    if (m_codecContext)     { avcodec_free_context(&m_codecContext); }
+    if (m_audioCodecContext){ avcodec_free_context(&m_audioCodecContext); }
+    if (m_formatContext)    { avformat_close_input(&m_formatContext); }
+
+    m_width = m_height = 0;
+    m_durationSeconds = m_currentPositionSeconds = 0.0;
+    m_videoStreamIndex = m_audioStreamIndex = -1;
+}
+
+// ---------------------------------------------------------------------------
+// Video decoding
+// ---------------------------------------------------------------------------
 
 bool FFmpegDecoder::decodeNextFrame(Frame& outFrame) {
     if (!m_isOpen || !m_formatContext || !m_codecContext) return false;
 
     while (m_isOpen) {
-        // 1. Try receiving decoded video frame
+        // Try to receive a decoded video frame
         int ret = avcodec_receive_frame(m_codecContext, m_avFrame);
         if (ret == 0) {
-            int frameW = m_avFrame->width > 0 ? m_avFrame->width : m_width;
-            int frameH = m_avFrame->height > 0 ? m_avFrame->height : m_height;
-            m_width = frameW;
-            m_height = frameH;
+            int w = m_avFrame->width  > 0 ? m_avFrame->width  : m_width;
+            int h = m_avFrame->height > 0 ? m_avFrame->height : m_height;
+            m_width = w; m_height = h;
 
-            AVStream* stream = m_formatContext->streams[m_videoStreamIndex];
-            if (m_avFrame->pts != AV_NOPTS_VALUE) {
+            auto* stream = m_formatContext->streams[m_videoStreamIndex];
+            if (m_avFrame->pts != AV_NOPTS_VALUE)
                 m_currentPositionSeconds = m_avFrame->pts * av_q2d(stream->time_base);
-            } else if (m_avFrame->pkt_dts != AV_NOPTS_VALUE) {
+            else if (m_avFrame->pkt_dts != AV_NOPTS_VALUE)
                 m_currentPositionSeconds = m_avFrame->pkt_dts * av_q2d(stream->time_base);
-            }
 
-            AVPixelFormat pixFmt = static_cast<AVPixelFormat>(m_avFrame->format);
-
-            m_swsContext = sws_getCachedContext(
-                m_swsContext,
-                frameW, frameH, pixFmt,
-                frameW, frameH, AV_PIX_FMT_RGBA,
-                SWS_BICUBIC | SWS_ACCURATE_RND, nullptr, nullptr, nullptr
-            );
-
+            auto pixFmt = static_cast<AVPixelFormat>(m_avFrame->format);
+            m_swsContext = sws_getCachedContext(m_swsContext,
+                w, h, pixFmt, w, h, AV_PIX_FMT_RGBA,
+                SWS_BICUBIC | SWS_ACCURATE_RND, nullptr, nullptr, nullptr);
             if (!m_swsContext) return false;
 
-            if (outFrame.width() != frameW || outFrame.height() != frameH) {
-                outFrame.resize(frameW, frameH, PixelFormat::RGBA32);
-            }
+            if (outFrame.width() != w || outFrame.height() != h)
+                outFrame.resize(w, h, PixelFormat::RGBA32);
 
-            uint8_t* dstData[4] = { outFrame.data(), nullptr, nullptr, nullptr };
-            int dstLinesize[4] = { outFrame.stride(), 0, 0, 0 };
-
-            sws_scale(
-                m_swsContext,
-                m_avFrame->data,
-                m_avFrame->linesize,
-                0,
-                frameH,
-                dstData,
-                dstLinesize
-            );
-
+            uint8_t* dst[4]  = { outFrame.data(), nullptr, nullptr, nullptr };
+            int      dl[4]   = { outFrame.stride(), 0, 0, 0 };
+            sws_scale(m_swsContext, m_avFrame->data, m_avFrame->linesize, 0, h, dst, dl);
             outFrame.setPts(m_currentPositionSeconds);
             return true;
         }
 
-        // 2. Feed video packets from queue
-        AVPacket* pktToFeed = nullptr;
+        // Feed the next video packet
+        AVPacket* pkt = nullptr;
         {
             std::lock_guard<std::mutex> lock(m_queueMutex);
             if (!m_videoPacketQueue.empty()) {
-                pktToFeed = m_videoPacketQueue.front();
+                pkt = m_videoPacketQueue.front();
                 m_videoPacketQueue.pop_front();
             }
         }
-
-        if (pktToFeed) {
-            avcodec_send_packet(m_codecContext, pktToFeed);
-            av_packet_free(&pktToFeed);
+        if (pkt) {
+            avcodec_send_packet(m_codecContext, pkt);
+            av_packet_free(&pkt);
         } else {
             readPackets(30);
-            
             std::lock_guard<std::mutex> lock(m_queueMutex);
             if (m_videoPacketQueue.empty()) {
-                // EOF reached
+                if (!m_atFormatEof) {
+                    // Video queue temporarily empty - NOT EOF.
+                    // This can happen when readPackets hit the video queue limit
+                    // but there are still more packets in the file.
+                    // Return false; caller (FileSource::decodeWorkerLoop) will check
+                    // atFormatEof() and retry instead of triggering a loop/seek.
+                    return false;
+                }
+                // True video EOF — flush remaining frames from video codec
                 avcodec_send_packet(m_codecContext, nullptr);
                 ret = avcodec_receive_frame(m_codecContext, m_avFrame);
                 if (ret == 0) {
-                    int frameW = m_avFrame->width > 0 ? m_avFrame->width : m_width;
-                    int frameH = m_avFrame->height > 0 ? m_avFrame->height : m_height;
-                    m_width = frameW;
-                    m_height = frameH;
+                    int w = m_avFrame->width  > 0 ? m_avFrame->width  : m_width;
+                    int h = m_avFrame->height > 0 ? m_avFrame->height : m_height;
+                    m_width = w; m_height = h;
 
-                    AVPixelFormat pixFmt = static_cast<AVPixelFormat>(m_avFrame->format);
-                    m_swsContext = sws_getCachedContext(
-                        m_swsContext,
-                        frameW, frameH, pixFmt,
-                        frameW, frameH, AV_PIX_FMT_RGBA,
-                        SWS_BICUBIC | SWS_ACCURATE_RND, nullptr, nullptr, nullptr
-                    );
-
+                    auto pixFmt = static_cast<AVPixelFormat>(m_avFrame->format);
+                    m_swsContext = sws_getCachedContext(m_swsContext,
+                        w, h, pixFmt, w, h, AV_PIX_FMT_RGBA,
+                        SWS_BICUBIC | SWS_ACCURATE_RND, nullptr, nullptr, nullptr);
                     if (!m_swsContext) return false;
-
-                    if (outFrame.width() != frameW || outFrame.height() != frameH) {
-                        outFrame.resize(frameW, frameH, PixelFormat::RGBA32);
-                    }
-
-                    uint8_t* dstData[4] = { outFrame.data(), nullptr, nullptr, nullptr };
-                    int dstLinesize[4] = { outFrame.stride(), 0, 0, 0 };
-                    sws_scale(m_swsContext, m_avFrame->data, m_avFrame->linesize, 0, frameH, dstData, dstLinesize);
+                    if (outFrame.width() != w || outFrame.height() != h)
+                        outFrame.resize(w, h, PixelFormat::RGBA32);
+                    uint8_t* dst[4] = { outFrame.data(), nullptr, nullptr, nullptr };
+                    int      dl[4]  = { outFrame.stride(), 0, 0, 0 };
+                    sws_scale(m_swsContext, m_avFrame->data, m_avFrame->linesize, 0, h, dst, dl);
                     return true;
                 }
-                return false;
+                return false;   // Video truly done
             }
         }
     }
-
     return false;
 }
+
+// ---------------------------------------------------------------------------
+// Audio decoding — normal path
+// ---------------------------------------------------------------------------
 
 bool FFmpegDecoder::decodeAudioSamples(std::vector<float>& outPcmBuffer) {
     if (!m_isOpen || !m_audioCodecContext || !m_swrContext || m_audioStreamIndex < 0) return false;
@@ -265,52 +291,87 @@ bool FFmpegDecoder::decodeAudioSamples(std::vector<float>& outPcmBuffer) {
 
     bool decodedAny = false;
 
-    while (m_isOpen) {
-        AVPacket* pktToFeed = nullptr;
+    // Limit per-call output to 0.5s to keep m_audioBuffer stable
+    while (m_isOpen && outPcmBuffer.size() < 24000) {
+        AVPacket* pkt = nullptr;
         {
             std::lock_guard<std::mutex> lock(m_queueMutex);
             if (!m_audioPacketQueue.empty()) {
-                pktToFeed = m_audioPacketQueue.front();
+                pkt = m_audioPacketQueue.front();
                 m_audioPacketQueue.pop_front();
             }
         }
+        if (!pkt) break;    // Queue empty — normal, more will arrive later
 
-        if (pktToFeed) {
-            avcodec_send_packet(m_audioCodecContext, pktToFeed);
-            av_packet_free(&pktToFeed);
-        } else {
-            break;
-        }
+        avcodec_send_packet(m_audioCodecContext, pkt);
+        av_packet_free(&pkt);
 
         while (m_isOpen) {
             int ret = avcodec_receive_frame(m_audioCodecContext, m_audioFrame);
-            if (ret == 0) {
-                int outSamples = swr_get_out_samples(m_swrContext, m_audioFrame->nb_samples);
-                if (outSamples > 0) {
-                    std::vector<float> resampled(outSamples * 2);
-                    uint8_t* outData[1] = { reinterpret_cast<uint8_t*>(resampled.data()) };
-
-                    int converted = swr_convert(
-                        m_swrContext,
-                        outData,
-                        outSamples,
-                        (const uint8_t**)m_audioFrame->data,
-                        m_audioFrame->nb_samples
-                    );
-
-                    if (converted > 0) {
-                        outPcmBuffer.insert(outPcmBuffer.end(), resampled.begin(), resampled.begin() + (converted * 2));
-                        decodedAny = true;
-                    }
-                }
-            } else {
-                break;
-            }
+            if (ret != 0) break;
+            if (resampleFrame(m_swrContext, m_audioFrame, outPcmBuffer))
+                decodedAny = true;
         }
     }
 
     return decodedAny;
 }
+
+// ---------------------------------------------------------------------------
+// Audio decoder flush — MUST be called before every seek to recover samples
+// that the codec holds internally (decoder delay, AAC/MP3 priming frames etc.)
+// ---------------------------------------------------------------------------
+
+bool FFmpegDecoder::drainAudio(std::vector<float>& outPcmBuffer) {
+    if (!m_audioCodecContext || !m_swrContext || m_audioStreamIndex < 0) return false;
+
+    // 1. First, decode any remaining packets already in the queue
+    {
+        std::lock_guard<std::mutex> lock(m_queueMutex);
+        while (!m_audioPacketQueue.empty()) {
+            AVPacket* pkt = m_audioPacketQueue.front();
+            m_audioPacketQueue.pop_front();
+            avcodec_send_packet(m_audioCodecContext, pkt);
+            av_packet_free(&pkt);
+
+            while (true) {
+                int ret = avcodec_receive_frame(m_audioCodecContext, m_audioFrame);
+                if (ret != 0) break;
+                resampleFrame(m_swrContext, m_audioFrame, outPcmBuffer);
+            }
+        }
+    }
+
+    // 2. Send flush (nullptr) packet to drain codec internal delay buffers
+    avcodec_send_packet(m_audioCodecContext, nullptr);
+
+    bool got = false;
+    while (true) {
+        int ret = avcodec_receive_frame(m_audioCodecContext, m_audioFrame);
+        if (ret != 0) break;
+        if (resampleFrame(m_swrContext, m_audioFrame, outPcmBuffer))
+            got = true;
+    }
+
+    // 3. Flush any resampler internal latency
+    while (true) {
+        int remaining = swr_get_out_samples(m_swrContext, 0);
+        if (remaining <= 0) break;
+        std::vector<float> tail(static_cast<size_t>(remaining) * 2);
+        uint8_t* outData[1] = { reinterpret_cast<uint8_t*>(tail.data()) };
+        int converted = swr_convert(m_swrContext, outData, remaining, nullptr, 0);
+        if (converted <= 0) break;
+        outPcmBuffer.insert(outPcmBuffer.end(), tail.begin(),
+                            tail.begin() + static_cast<ptrdiff_t>(converted) * 2);
+        got = true;
+    }
+
+    return got;
+}
+
+// ---------------------------------------------------------------------------
+// Seeking
+// ---------------------------------------------------------------------------
 
 bool FFmpegDecoder::seekToBeginning() {
     return seekToSeconds(0.0);
@@ -322,46 +383,19 @@ bool FFmpegDecoder::seekToSeconds(double seconds) {
     clearPacketQueues();
 
     if (m_videoStreamIndex >= 0) {
-        AVStream* stream = m_formatContext->streams[m_videoStreamIndex];
-        int64_t targetTimestamp = static_cast<int64_t>(seconds / av_q2d(stream->time_base));
-        av_seek_frame(m_formatContext, m_videoStreamIndex, targetTimestamp, AVSEEK_FLAG_BACKWARD);
+        auto* stream = m_formatContext->streams[m_videoStreamIndex];
+        int64_t ts = static_cast<int64_t>(seconds / av_q2d(stream->time_base));
+        av_seek_frame(m_formatContext, m_videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
     } else if (m_audioStreamIndex >= 0) {
-        AVStream* stream = m_formatContext->streams[m_audioStreamIndex];
-        int64_t targetTimestamp = static_cast<int64_t>(seconds / av_q2d(stream->time_base));
-        av_seek_frame(m_formatContext, m_audioStreamIndex, targetTimestamp, AVSEEK_FLAG_BACKWARD);
+        auto* stream = m_formatContext->streams[m_audioStreamIndex];
+        int64_t ts = static_cast<int64_t>(seconds / av_q2d(stream->time_base));
+        av_seek_frame(m_formatContext, m_audioStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
     }
 
-    if (m_codecContext) avcodec_flush_buffers(m_codecContext);
+    if (m_codecContext)      avcodec_flush_buffers(m_codecContext);
     if (m_audioCodecContext) avcodec_flush_buffers(m_audioCodecContext);
 
     m_currentPositionSeconds = seconds;
+    m_atFormatEof = false;
     return true;
-}
-
-void FFmpegDecoder::close() {
-    m_isOpen = false;
-    clearPacketQueues();
-
-    if (m_swsContext) {
-        sws_freeContext(m_swsContext);
-        m_swsContext = nullptr;
-    }
-    if (m_swrContext) {
-        swr_free(&m_swrContext);
-    }
-    if (m_codecContext) {
-        avcodec_free_context(&m_codecContext);
-    }
-    if (m_audioCodecContext) {
-        avcodec_free_context(&m_audioCodecContext);
-    }
-    if (m_formatContext) {
-        avformat_close_input(&m_formatContext);
-    }
-    m_width = 0;
-    m_height = 0;
-    m_durationSeconds = 0.0;
-    m_currentPositionSeconds = 0.0;
-    m_videoStreamIndex = -1;
-    m_audioStreamIndex = -1;
 }

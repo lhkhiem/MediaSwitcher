@@ -14,13 +14,6 @@ public:
     // Returns the latest available frame, or nullptr if none
     virtual std::shared_ptr<Frame> getFrame() = 0;
 
-    // Fills output buffer with interleaved audio PCM float samples (Stereo 48kHz: L, R...)
-    virtual size_t getAudioSamples(float* buffer, size_t maxSamples) {
-        (void)buffer;
-        (void)maxSamples;
-        return 0;
-    }
-
     // Per-channel volume control interface
     virtual void setVolume(float vol) { (void)vol; }
     virtual float volume() const { return 1.0f; }
@@ -31,6 +24,9 @@ public:
     virtual double durationSeconds() const { return 0.0; }
     virtual double positionSeconds() const { return 0.0; }
     virtual void seekToSeconds(double seconds) {}
+    // Seamless loop: flushes codec, seeks to 0, but does NOT clear the audio buffer.
+    // Use this for looping instead of seekToSeconds(0) to preserve pre-buffered audio.
+    virtual void loopToBeginning() { seekToSeconds(0.0); }
     virtual void setLoop(bool loop) {}
     virtual bool isLoop() const { return false; }
     virtual void play() {}

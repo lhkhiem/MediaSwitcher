@@ -115,7 +115,7 @@ public:
                 shouldAdvance = true;
             }
         } else { // Full Video / EOF mode
-            if (pgmDuration > 0.5 && (pgmPosition >= pgmDuration - 0.35 || !pgmIsPlaying)) {
+            if (pgmDuration > 0.5 && (pgmPosition >= pgmDuration - 0.05 || !pgmIsPlaying)) {
                 shouldAdvance = true;
             } else if (pgmDuration <= 0.0 && elapsedSec >= 5.0) { // Still image fallback
                 shouldAdvance = true;

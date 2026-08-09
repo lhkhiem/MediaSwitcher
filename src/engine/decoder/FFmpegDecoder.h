@@ -28,12 +28,17 @@ public:
     // Reads decoded and resampled audio samples (Stereo 48kHz float: L, R, L, R...)
     bool decodeAudioSamples(std::vector<float>& outPcmBuffer);
 
+    // Flush the audio codec internal buffers (call when near EOF before seeking)
+    bool drainAudio(std::vector<float>& outPcmBuffer);
+
     bool seekToBeginning();
     bool seekToSeconds(double seconds);
     void close();
 
     bool isOpen() const { return m_isOpen; }
+    bool hasVideo() const { return m_videoStreamIndex >= 0; }
     bool hasAudio() const { return m_audioStreamIndex >= 0; }
+    bool atFormatEof() const { return m_atFormatEof; }
     int width() const { return m_width; }
     int height() const { return m_height; }
     double fps() const { return m_fps; }
@@ -45,6 +50,7 @@ private:
     void clearPacketQueues();
 
     bool m_isOpen{false};
+    bool m_atFormatEof{false};
     std::string m_filePath;
 
     int m_width{0};

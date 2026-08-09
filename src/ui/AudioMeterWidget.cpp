@@ -1,5 +1,4 @@
 #include "AudioMeterWidget.h"
-#include "engine/audio/AudioEngine.h"
 #include <QPainter>
 #include <QLinearGradient>
 #include <algorithm>
@@ -24,9 +23,10 @@ void AudioMeterWidget::setLevels(float leftPeak, float rightPeak) {
 }
 
 void AudioMeterWidget::updateMeters() {
-    float l = AudioEngine::instance().getLeftPeak();
-    float r = AudioEngine::instance().getRightPeak();
-    setLevels(l, r);
+    // Audio is now handled by Qt QMediaPlayer internally.
+    // Peak level metering not available without a custom audio sink.
+    // Meter shows silence; can be enhanced later with QAudioSink probe.
+    setLevels(0.0f, 0.0f);
     update();
 }
 

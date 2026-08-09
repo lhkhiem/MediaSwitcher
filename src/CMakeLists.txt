@@ -1,8 +1,8 @@
 # Find Packages
-find_package(Qt6 COMPONENTS Core Gui Widgets REQUIRED)
+find_package(Qt6 COMPONENTS Core Gui Widgets Multimedia REQUIRED)
 
 # DirectX 11 Libraries
-set(DIRECTX_LIBRARIES d3d11.lib dxgi.lib d3dcompiler.lib xaudio2.lib ole32.lib)
+set(DIRECTX_LIBRARIES d3d11.lib dxgi.lib d3dcompiler.lib ole32.lib)
 
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
@@ -52,8 +52,7 @@ set(SOURCES
     engine/input/GlobalPlaylistController.h
     engine/decoder/FFmpegDecoder.cpp
     engine/decoder/FFmpegDecoder.h
-    engine/audio/AudioEngine.cpp
-    engine/audio/AudioEngine.h
+    # AudioEngine removed — audio is now handled by QMediaPlayer (Qt6::Multimedia)
 )
 
 # MOC
@@ -78,6 +77,7 @@ target_link_libraries(MediaSwitcher PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::Multimedia
     spdlog::spdlog
     fmt::fmt
     ${DIRECTX_LIBRARIES}

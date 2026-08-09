@@ -7,8 +7,8 @@
 #include "ui/AboutDialog.h"
 #include "common/config/AppInfo.h"
 #include "engine/input/GlobalPlaylistController.h"
-#include "engine/audio/AudioEngine.h"
 #include "common/logger/Logger.h"
+#include <chrono>
 
 #include <QMenuBar>
 #include <QToolBar>
@@ -25,7 +25,6 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     LOG_INFO("MainWindow created.");
-    AudioEngine::instance().initialize();
     setupUi();
 
     m_inputManager.setOnInputListChanged([this]() {
@@ -58,7 +57,6 @@ MainWindow::MainWindow(QWidget *parent)
 }
 
 MainWindow::~MainWindow() {
-    AudioEngine::instance().shutdown();
     if (m_ledOutputWindow) {
         m_ledOutputWindow->close();
         delete m_ledOutputWindow;
@@ -68,7 +66,6 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
-    AudioEngine::instance().shutdown();
     if (m_ledOutputWindow) {
         m_ledOutputWindow->close();
         delete m_ledOutputWindow;
@@ -1382,7 +1379,11 @@ void MainWindow::onQuickPlayClicked() {
 
 void MainWindow::onFTBClicked() {
     m_isFtbActive = !m_isFtbActive;
-    AudioEngine::instance().setFtbAlpha(m_isFtbActive ? 0.0f : 1.0f);
+    // FTB: mute/unmute the active program source directly
+    auto pgmSrc = m_inputManager.programSource();
+    if (pgmSrc) {
+        pgmSrc->setMuted(m_isFtbActive);
+    }
 
     if (m_pgmWindow && m_pgmWindow->renderer()) {
         m_pgmWindow->renderer()->setFTB(m_isFtbActive, 500.0f);
@@ -1852,37 +1853,27 @@ void MainWindow::updatePlaybackStatus() {
         }
     }
 
-    // 3. Audio Pumping from Program Source into AudioEngine (Rate-Monitored 1.000x Flow)
-    if (pgmSource && pgmSource->isPlaying()) {
-        size_t currentRingSize = AudioEngine::instance().getRingBufferSize();
-        // Maintain AudioEngine ring buffer depth at ~19,200 floats (0.2s of audio @ 48kHz stereo)
-        if (currentRingSize < 19200) {
-            size_t neededFloats = 19200 - currentRingSize;
-            float pcmBuffer[9600];
-            size_t totalPumped = 0;
-            while (totalPumped < neededFloats) {
-                size_t toRead = (std::min)(neededFloats - totalPumped, static_cast<size_t>(9600));
-                size_t count = pgmSource->getAudioSamples(pcmBuffer, toRead);
-                if (count == 0) break;
-                AudioEngine::instance().submitAudioSamples(pcmBuffer, count / 2);
-                totalPumped += count;
-            }
-        }
-    }
+    // Audio pumping is handled by the dedicated m_audioPumpThread (audioPumpLoop),
+    // NOT here, so that audio delivery is never blocked by Qt UI event processing.
 }
+
+
 
 void MainWindow::onMasterVolumeChanged(int value) {
     float vol = static_cast<float>(value) / 100.0f;
-    AudioEngine::instance().setVolume(vol);
+    // Apply volume to the active program source
+    auto pgmSrc = m_inputManager.programSource();
+    if (pgmSrc) pgmSrc->setVolume(vol);
     if (m_volumeLabel) {
         m_volumeLabel->setText(QString("%1%").arg(value));
     }
 }
 
 void MainWindow::onMuteToggled() {
-    bool isMuted = AudioEngine::instance().isMuted();
+    auto pgmSrc = m_inputManager.programSource();
+    bool isMuted = pgmSrc ? pgmSrc->isMuted() : false;
     bool newMuted = !isMuted;
-    AudioEngine::instance().setMuted(newMuted);
+    if (pgmSrc) pgmSrc->setMuted(newMuted);
     if (m_muteBtn) {
         m_muteBtn->setText(newMuted ? "🔇" : "🔊");
         m_muteBtn->setStyleSheet(newMuted ? R"(

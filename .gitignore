@@ -2,6 +2,7 @@
 build/
 bin/
 out/
+installer/output/
 
 # Visual Studio files
 .vs/

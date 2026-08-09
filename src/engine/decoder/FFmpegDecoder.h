@@ -35,6 +35,10 @@ public:
     bool seekToSeconds(double seconds);
     void close();
 
+    // Configure packet queue limits to control memory usage.
+    // Call before open() or at runtime. Lower values = less RAM, more CPU seek.
+    void setQueueLimits(size_t maxVideoPackets, size_t maxAudioPackets);
+
     bool isOpen() const { return m_isOpen; }
     bool hasVideo() const { return m_videoStreamIndex >= 0; }
     bool hasAudio() const { return m_audioStreamIndex >= 0; }
@@ -76,4 +80,7 @@ private:
     std::mutex m_queueMutex;
     std::deque<AVPacket*> m_videoPacketQueue;
     std::deque<AVPacket*> m_audioPacketQueue;
+
+    size_t m_maxVideoQueueSize{20};   // Default: 20 packets (~2-10MB for 1080p)
+    size_t m_maxAudioQueueSize{200};  // Default: 200 packets (~0.5MB, ~2s audio)
 };

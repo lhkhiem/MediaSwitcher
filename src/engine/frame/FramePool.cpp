@@ -1,7 +1,8 @@
 #include "FramePool.h"
 
-FramePool::FramePool(size_t initialCapacity)
+FramePool::FramePool(size_t initialCapacity, size_t maxSize)
     : m_initialCapacity(initialCapacity)
+    , m_maxSize(maxSize)
 {
 }
 
@@ -23,7 +24,12 @@ std::shared_ptr<Frame> FramePool::acquire(int width, int height, PixelFormat for
 void FramePool::release(std::shared_ptr<Frame> frame) {
     if (!frame) return;
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_pool.push_back(frame);
+
+    // Drop the frame if pool is already at capacity.
+    // The shared_ptr going out of scope will free the pixel data immediately.
+    if (m_pool.size() >= m_maxSize) return;
+
+    m_pool.push_back(std::move(frame));
 }
 
 void FramePool::clear() {

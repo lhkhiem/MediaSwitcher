@@ -34,14 +34,13 @@ void FFmpegDecoder::readPackets(size_t maxCount) {
 
     size_t readCount = 0;
     while (m_isOpen && readCount < maxCount) {
-        // Only stop reading when the VIDEO queue is full.
-        // Audio queue is allowed to grow freely — audio packets are small (~1-4KB each)
-        // and we MUST NOT block video reads when audio is merely buffering ahead.
-        // Blocking on audioFull was the root cause of false mid-song EOF detection.
+        // Stop reading when either video OR audio queue is full.
+        // This prevents unbounded memory growth with high-bitrate sources.
         {
             std::lock_guard<std::mutex> lock(m_queueMutex);
-            bool videoFull = (m_videoStreamIndex >= 0 && m_videoPacketQueue.size() >= 100);
-            if (videoFull) break;
+            bool videoFull = (m_videoStreamIndex >= 0 && m_videoPacketQueue.size() >= m_maxVideoQueueSize);
+            bool audioFull = (m_audioStreamIndex >= 0 && m_audioPacketQueue.size() >= m_maxAudioQueueSize);
+            if (videoFull || audioFull) break;
         }
 
         int ret = av_read_frame(m_formatContext, m_avPacket);
@@ -59,6 +58,12 @@ void FFmpegDecoder::readPackets(size_t maxCount) {
             break;
         }
     }
+}
+
+void FFmpegDecoder::setQueueLimits(size_t maxVideoPackets, size_t maxAudioPackets) {
+    std::lock_guard<std::mutex> lock(m_queueMutex);
+    m_maxVideoQueueSize = maxVideoPackets;
+    m_maxAudioQueueSize = maxAudioPackets;
 }
 
 // Helper: resample one audio frame and append PCM to outPcmBuffer

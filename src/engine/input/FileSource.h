@@ -10,6 +10,11 @@
 #include <chrono>
 #include <vector>
 
+// Controls how aggressively a FileSource decodes.
+// Active: full-rate decode (source is PVW or PGM)
+// Idle:   minimal decode (source is not visible, conserve RAM/CPU)
+enum class DecodeMode { Active, Idle };
+
 class FileSource : public IMediaSource {
 public:
     explicit FileSource(const std::string& filePath = "");
@@ -43,6 +48,10 @@ public:
 
     const std::string& filePath() const { return m_filePath; }
 
+    // Decode mode: Active = full rate (PVW/PGM), Idle = minimal RAM/CPU
+    void setDecodeMode(DecodeMode mode);
+    DecodeMode decodeMode() const { return m_decodeMode.load(); }
+
 private:
     void decodeWorkerLoop();
     void drainAndSubmitAudio();  // Drain FFmpegDecoder audio queue → AudioEngine
@@ -65,6 +74,8 @@ private:
     std::mutex m_frameMutex;
     std::shared_ptr<Frame> m_currentFrame;
     std::shared_ptr<Frame> m_lastValidFrame;
+
+    std::atomic<DecodeMode> m_decodeMode{DecodeMode::Idle};
 
     // High resolution master wall clock for video frame pacing
     std::chrono::high_resolution_clock::time_point m_playbackStartTime;

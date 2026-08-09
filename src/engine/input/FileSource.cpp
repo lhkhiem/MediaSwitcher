@@ -1,9 +1,9 @@
 #include "FileSource.h"
+#include "engine/audio/AudioEngine.h"
 #include "common/logger/Logger.h"
-#include <QMetaObject>
-#include <QUrl>
-#include <chrono>
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 
 FileSource::FileSource(const std::string& filePath)
     : m_filePath(filePath)
@@ -22,43 +22,21 @@ bool FileSource::open() {
     if (m_opened) return true;
     if (m_filePath.empty()) return false;
 
-    // FFmpeg decoder for VIDEO frames only
+    // FFmpegDecoder handles BOTH video frames and audio PCM decode
     if (!m_decoder.open(m_filePath)) {
         LOG_ERROR("FileSource: Failed to open decoder for '{}'", m_filePath);
         return false;
     }
-
-    // Qt Multimedia for AUDIO — handles all codec/buffer/output internally
-    m_audioOutput = new QAudioOutput();
-    m_audioOutput->setVolume(m_volume.load());
-    m_audioOutput->setMuted(m_muted.load());
-
-    m_audioPlayer = new QMediaPlayer();
-    m_audioPlayer->setAudioOutput(m_audioOutput);
-    m_audioPlayer->setSource(QUrl::fromLocalFile(QString::fromStdString(m_filePath)));
-
-    // Log any audio player errors
-    QObject::connect(m_audioPlayer, &QMediaPlayer::errorOccurred,
-        m_audioPlayer, [this](QMediaPlayer::Error error, const QString& errorString) {
-            LOG_ERROR("FileSource audio error ({}): {}", (int)error, errorString.toStdString());
-        });
-
-    // Loop: restart audio when it reaches the end (if loop mode is on)
-    QObject::connect(m_audioPlayer, &QMediaPlayer::mediaStatusChanged,
-        m_audioPlayer, [this](QMediaPlayer::MediaStatus status) {
-            LOG_DEBUG("FileSource audio status: {}", (int)status);
-            if (status == QMediaPlayer::EndOfMedia && m_loop.load() && m_playing.load()) {
-                m_audioPlayer->setPosition(0);
-                m_audioPlayer->play();
-            }
-        });
 
     m_opened  = true;
     m_playing = false;
     m_running = true;
     m_workerThread = std::thread(&FileSource::decodeWorkerLoop, this);
 
-    LOG_INFO("FileSource: Opened '{}' paused at frame 0.", m_filePath);
+    LOG_INFO("FileSource: Opened '{}' (video:{} audio:{}) paused at frame 0.",
+             m_filePath,
+             m_decoder.hasVideo() ? "yes" : "no",
+             m_decoder.hasAudio() ? "yes" : "no");
     return true;
 }
 
@@ -67,22 +45,10 @@ void FileSource::close() {
 
     m_running = false;
     m_playing = false;
+    m_audioActive = false;
 
     if (m_workerThread.joinable())
         m_workerThread.join();
-
-    // Stop and delete QMediaPlayer on main thread
-    if (m_audioPlayer) {
-        QMetaObject::invokeMethod(m_audioPlayer, [this]() {
-            m_audioPlayer->stop();
-            m_audioPlayer->deleteLater();
-            m_audioPlayer = nullptr;
-            if (m_audioOutput) {
-                m_audioOutput->deleteLater();
-                m_audioOutput = nullptr;
-            }
-        }, Qt::QueuedConnection);
-    }
 
     m_decoder.close();
 
@@ -102,67 +68,40 @@ void FileSource::close() {
 
 void FileSource::play() {
     m_playing = true;
-    if (m_audioPlayer) {
-        QMetaObject::invokeMethod(m_audioPlayer, [this]() {
-            m_audioPlayer->play();
-        }, Qt::QueuedConnection);
-    }
 }
 
 void FileSource::pause() {
     m_playing = false;
-    if (m_audioPlayer) {
-        QMetaObject::invokeMethod(m_audioPlayer, [this]() {
-            m_audioPlayer->pause();
-        }, Qt::QueuedConnection);
-    }
 }
 
 double FileSource::durationSeconds() const { return m_decoder.durationSeconds(); }
 double FileSource::positionSeconds()  const { return m_decoder.currentPositionSeconds(); }
 
 void FileSource::setVolume(float vol) {
-    m_volume.store(vol);
-    if (m_audioOutput) {
-        QMetaObject::invokeMethod(m_audioOutput, [this, vol]() {
-            m_audioOutput->setVolume(vol);
-        }, Qt::QueuedConnection);
-    }
+    m_volume.store(std::clamp(vol, 0.0f, 1.0f));
 }
 
 void FileSource::setMuted(bool mute) {
     m_muted.store(mute);
-    if (m_audioOutput) {
-        QMetaObject::invokeMethod(m_audioOutput, [this, mute]() {
-            m_audioOutput->setMuted(mute);
-        }, Qt::QueuedConnection);
-    }
+}
+
+void FileSource::setAudioActive(bool active) {
+    m_audioActive.store(active);
+    LOG_DEBUG("FileSource '{}': audioActive = {}", m_filePath, active);
 }
 
 void FileSource::seekToSeconds(double seconds) {
     if (seconds < 0.0) seconds = 0.0;
     m_seekTarget.store(seconds);
-
-    // Seek audio player on main thread
-    if (m_audioPlayer) {
-        qint64 ms = static_cast<qint64>(seconds * 1000.0);
-        QMetaObject::invokeMethod(m_audioPlayer, [this, ms]() {
-            m_audioPlayer->setPosition(ms);
-        }, Qt::QueuedConnection);
-    }
 }
 
 void FileSource::loopToBeginning() {
-    // Reset video decoder
     m_decoder.seekToBeginning();
     m_clockInitialized = false;
 
-    // Restart audio from beginning on main thread
-    if (m_audioPlayer) {
-        QMetaObject::invokeMethod(m_audioPlayer, [this]() {
-            m_audioPlayer->setPosition(0);
-            if (m_playing.load()) m_audioPlayer->play();
-        }, Qt::QueuedConnection);
+    // Clear stale audio from AudioEngine so the looped audio starts cleanly
+    if (m_audioActive.load()) {
+        AudioEngine::instance().clearAudioBuffer();
     }
 }
 
@@ -179,7 +118,31 @@ std::shared_ptr<Frame> FileSource::getFrame() {
 }
 
 // ---------------------------------------------------------------------------
-// Decode worker loop — VIDEO ONLY. Audio is handled by QMediaPlayer.
+// Audio: drain FFmpegDecoder audio queue and submit to AudioEngine
+// ---------------------------------------------------------------------------
+
+void FileSource::drainAndSubmitAudio() {
+    if (!m_decoder.hasAudio()) return;
+
+    // Throttle: don't over-buffer (> 2 seconds of audio)
+    if (AudioEngine::instance().getRingBufferSize() > static_cast<size_t>(48000) * 2 * 2) return;
+
+    std::vector<float> pcm;
+    m_decoder.decodeAudioSamples(pcm);
+
+    // Only submit to AudioEngine when this source is the active PGM audio source
+    if (!pcm.empty() && m_audioActive.load()) {
+        // Apply per-slot volume/mute gain before submitting
+        float vol = m_muted.load() ? 0.0f : m_volume.load();
+        if (std::abs(vol - 1.0f) > 0.001f) {
+            for (auto& s : pcm) s *= vol;
+        }
+        AudioEngine::instance().submitAudioSamples(pcm.data(), pcm.size() / 2);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Decode worker loop — Video pacing + Audio draining
 // ---------------------------------------------------------------------------
 
 void FileSource::decodeWorkerLoop() {
@@ -190,12 +153,16 @@ void FileSource::decodeWorkerLoop() {
 
     while (m_running) {
 
-        // --- Handle user-initiated seek (video side) ---
+        // --- Handle user-initiated seek ---
         double seekSec = m_seekTarget.exchange(-1.0);
         if (seekSec >= 0.0) {
             m_decoder.seekToSeconds(seekSec);
             m_clockInitialized = false;
-            // Decode one still frame so the UI shows the seek position
+            // Clear AudioEngine buffer so stale audio doesn't play after seek
+            if (m_audioActive.load()) {
+                AudioEngine::instance().clearAudioBuffer();
+            }
+            // Decode one still frame so the UI shows the seek position immediately
             auto frame = m_framePool.acquire(m_decoder.width(), m_decoder.height(), PixelFormat::RGBA32);
             if (m_decoder.decodeNextFrame(*frame)) {
                 std::lock_guard<std::mutex> lock(m_frameMutex);
@@ -204,7 +171,7 @@ void FileSource::decodeWorkerLoop() {
             }
         }
 
-        // --- Paused: hold on first frame ---
+        // --- Paused: hold on first frame, no audio ---
         if (!m_playing) {
             m_clockInitialized = false;
             bool hasFrame = false;
@@ -224,7 +191,11 @@ void FileSource::decodeWorkerLoop() {
             continue;
         }
 
-        // --- Video-only path ---
+        // --- Drain audio packets (always call to prevent queue overflow) ---
+        // Submits to AudioEngine only when m_audioActive == true
+        drainAndSubmitAudio();
+
+        // --- Video decode path ---
         if (m_decoder.hasVideo()) {
             auto frame    = m_framePool.acquire(m_decoder.width(), m_decoder.height(), PixelFormat::RGBA32);
             bool gotVideo = m_decoder.decodeNextFrame(*frame);
@@ -273,9 +244,17 @@ void FileSource::decodeWorkerLoop() {
             }
 
         } else {
-            // Audio-only file: nothing for video thread to do
-            // QMediaPlayer handles playback and looping completely
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            // Audio-only file: drainAndSubmitAudio() is called above.
+            // Just check for EOF / loop here.
+            if (m_decoder.atFormatEof()) {
+                if (m_loop) {
+                    loopToBeginning();
+                } else {
+                    m_playing          = false;
+                    m_clockInitialized = false;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
     }
 }

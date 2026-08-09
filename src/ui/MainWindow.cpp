@@ -7,6 +7,7 @@
 #include "ui/AboutDialog.h"
 #include "common/config/AppInfo.h"
 #include "engine/input/GlobalPlaylistController.h"
+#include "engine/audio/AudioEngine.h"
 #include "common/logger/Logger.h"
 #include <chrono>
 
@@ -44,6 +45,7 @@ MainWindow::MainWindow(QWidget *parent)
         QMetaObject::invokeMethod(this, [this]() {
             updateViewports();
             rebuildInputDock();
+            activatePgmAudio();  // Route audio from new PGM source to AudioEngine
         }, Qt::QueuedConnection);
     });
 
@@ -77,7 +79,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::setupUi() {
-    this->setWindowTitle("MediaSwitcher - LED Screen Broadcast & Media Engine (vMix Grade)");
+    this->setWindowTitle("MediaSwitcher - LED Screen Broadcast & Media Engine");
     this->resize(1366, 768);
 
     // Dark Studio QSS Style
@@ -231,7 +233,7 @@ void MainWindow::setupUi() {
     pvwLayout->addWidget(m_pvwWindow, 1); // Expand video viewport to fill space
     m_pvwWindow->initDirectX();
 
-    // Broadcast Ultra-Compact vMix Control Bar for PREVIEW
+    // Broadcast Ultra-Compact Control Bar for PREVIEW
     QWidget* pvwBarWidget = new QWidget(pvwGroup);
     pvwBarWidget->setStyleSheet(R"(
         QWidget {
@@ -317,7 +319,7 @@ void MainWindow::setupUi() {
 
     pvwBarLayout->addLayout(pvwRow1);
 
-    // Row 2: Sleek vMix-style Timeline Slider
+    // Row 2: Sleek Timeline Slider
     m_pvwSeekSlider = new QSlider(Qt::Horizontal, pvwBarWidget);
     m_pvwSeekSlider->setRange(0, 1000);
     m_pvwSeekSlider->setValue(0);
@@ -363,7 +365,7 @@ void MainWindow::setupUi() {
     centerControlLayout->setSpacing(8);
 
 
-    // FTB Emergency Button (vMix Fade To Black)
+    // FTB Emergency Button (Fade To Black)
     m_ftbBtn = new QPushButton("FTB", centralWidget);
     m_ftbBtn->setFixedSize(90, 36);
     m_ftbBtn->setToolTip("FTB - Fade To Black (F12)");
@@ -450,7 +452,7 @@ void MainWindow::setupUi() {
     connect(fadeBtn, &QPushButton::clicked, this, &MainWindow::onFadeClicked);
     centerControlLayout->addWidget(fadeBtn);
 
-    // vMix Manual T-Bar Transition Slider
+    // Manual T-Bar Transition Slider
     QLabel* tbarHeaderLabel = new QLabel("T-Bar", centralWidget);
     tbarHeaderLabel->setStyleSheet("color: #FF9800; font-size: 10px; font-weight: bold;");
     tbarHeaderLabel->setAlignment(Qt::AlignCenter);
@@ -676,7 +678,7 @@ void MainWindow::setupUi() {
     pgmLayout->addWidget(m_pgmWindow, 1); // Expand video viewport to fill space
     m_pgmWindow->initDirectX();
 
-    // Broadcast Ultra-Compact vMix Control Bar for PROGRAM (PGM) - LIVE
+    // Broadcast Ultra-Compact Control Bar for PROGRAM (PGM) - LIVE
     QWidget* pgmBarWidget = new QWidget(pgmGroup);
     pgmBarWidget->setStyleSheet(R"(
         QWidget {
@@ -762,7 +764,7 @@ void MainWindow::setupUi() {
 
     pgmBarLayout->addLayout(pgmRow1);
 
-    // Row 2: Sleek vMix-style Timeline Slider (Red PGM Track)
+    // Row 2: Sleek Timeline Slider (Red PGM Track)
     m_pgmSeekSlider = new QSlider(Qt::Horizontal, pgmBarWidget);
     m_pgmSeekSlider->setRange(0, 1000);
     m_pgmSeekSlider->setValue(0);
@@ -805,7 +807,7 @@ void MainWindow::setupUi() {
     mainLayout->addLayout(topLayout, 6);
 
     // BOTTOM PANEL: Multi-Input Dock Grid
-    QGroupBox* dockGroup = new QGroupBox("INPUT CHANNELS (vMix Grid)", centralWidget);
+    QGroupBox* dockGroup = new QGroupBox("INPUT CHANNELS", centralWidget);
     dockGroup->setStyleSheet(R"(
         QGroupBox {
             color: #CCCCCC;
@@ -1861,19 +1863,17 @@ void MainWindow::updatePlaybackStatus() {
 
 void MainWindow::onMasterVolumeChanged(int value) {
     float vol = static_cast<float>(value) / 100.0f;
-    // Apply volume to the active program source
-    auto pgmSrc = m_inputManager.programSource();
-    if (pgmSrc) pgmSrc->setVolume(vol);
+    // Route master volume through AudioEngine (XAudio2)
+    AudioEngine::instance().setVolume(vol);
     if (m_volumeLabel) {
         m_volumeLabel->setText(QString("%1%").arg(value));
     }
 }
 
 void MainWindow::onMuteToggled() {
-    auto pgmSrc = m_inputManager.programSource();
-    bool isMuted = pgmSrc ? pgmSrc->isMuted() : false;
+    bool isMuted = AudioEngine::instance().isMuted();
     bool newMuted = !isMuted;
-    if (pgmSrc) pgmSrc->setMuted(newMuted);
+    AudioEngine::instance().setMuted(newMuted);
     if (m_muteBtn) {
         m_muteBtn->setText(newMuted ? "🔇" : "🔊");
         m_muteBtn->setStyleSheet(newMuted ? R"(
@@ -1895,4 +1895,23 @@ void MainWindow::onMuteToggled() {
 void MainWindow::onShowAboutDialog() {
     AboutDialog dlg(this);
     dlg.exec();
+}
+
+void MainWindow::activatePgmAudio() {
+    // Deactivate audio on the previous PGM source
+    if (m_pgmAudioSource) {
+        m_pgmAudioSource->setAudioActive(false);
+        m_pgmAudioSource = nullptr;
+    }
+
+    // Activate audio on the new PGM source
+    auto pgmSrc = m_inputManager.programSource();
+    if (pgmSrc) {
+        // Clear stale audio from the previous source
+        AudioEngine::instance().clearAudioBuffer();
+        AudioEngine::instance().resetAudioPts(pgmSrc->positionSeconds());
+        pgmSrc->setAudioActive(true);
+        m_pgmAudioSource = pgmSrc;
+        LOG_INFO("MainWindow: Audio routed to PGM source pos={:.2f}s", pgmSrc->positionSeconds());
+    }
 }

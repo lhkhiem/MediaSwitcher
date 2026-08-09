@@ -160,6 +160,7 @@ bool FFmpegDecoder::open(const std::string& filePath) {
                                        0, nullptr);
                     av_channel_layout_uninit(&inLayout);
                     if (m_swrContext) swr_init(m_swrContext);
+                }
             }
         }
     }

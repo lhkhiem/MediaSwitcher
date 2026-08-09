@@ -261,7 +261,7 @@ void InputSlotWidget::paintEvent(QPaintEvent *event) {
         m_audioBtn->setText(muted ? "🔇" : "🔊");
     }
 
-    // 6. Draw vMix Border
+    // 6. Draw Slot Border
     QPen pen;
     if (m_isPgm && m_isPvw) {
         pen.setColor(QColor(255, 110, 0)); // Amber-Red for PVW+PGM

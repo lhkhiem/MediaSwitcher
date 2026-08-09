@@ -1,5 +1,5 @@
 # Find Packages
-find_package(Qt6 COMPONENTS Core Gui Widgets Multimedia REQUIRED)
+find_package(Qt6 COMPONENTS Core Gui Widgets REQUIRED)
 
 # DirectX 11 Libraries
 set(DIRECTX_LIBRARIES d3d11.lib dxgi.lib d3dcompiler.lib ole32.lib)
@@ -52,7 +52,8 @@ set(SOURCES
     engine/input/GlobalPlaylistController.h
     engine/decoder/FFmpegDecoder.cpp
     engine/decoder/FFmpegDecoder.h
-    # AudioEngine removed — audio is now handled by QMediaPlayer (Qt6::Multimedia)
+    engine/audio/AudioEngine.cpp
+    engine/audio/AudioEngine.h
 )
 
 # MOC
@@ -77,7 +78,6 @@ target_link_libraries(MediaSwitcher PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
-    Qt6::Multimedia
     spdlog::spdlog
     fmt::fmt
     ${DIRECTX_LIBRARIES}
@@ -95,7 +95,7 @@ add_custom_command(TARGET MediaSwitcher POST_BUILD
 get_target_property(QT_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
 get_filename_component(QT_BIN_DIR "${QT_QMAKE_EXECUTABLE}" DIRECTORY)
 add_custom_command(TARGET MediaSwitcher POST_BUILD
-    COMMAND "${QT_BIN_DIR}/windeployqt.exe" --no-compiler-runtime "$<TARGET_FILE:MediaSwitcher>"
+    COMMAND "${QT_BIN_DIR}/windeployqt.exe" --no-compiler-runtime --no-system-d3d-compiler "$<TARGET_FILE:MediaSwitcher>"
 )
 
 # Compile options

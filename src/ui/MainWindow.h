@@ -18,6 +18,7 @@
 #include <QSlider>
 #include <QTimer>
 #include <QLineEdit>
+#include "engine/input/IMediaSource.h"
 #include <thread>
 #include <atomic>
 
@@ -68,6 +69,7 @@ private slots:
     void onMuteToggled();
 
     void onShowAboutDialog();
+    void activatePgmAudio();
 
 private:
     void setupUi();
@@ -127,4 +129,7 @@ private:
     bool m_isPgmUserSeeking{false};
 
     QTimer* m_playbackTimer{nullptr};
+
+    // Tracks which source is currently outputting audio to AudioEngine
+    std::shared_ptr<IMediaSource> m_pgmAudioSource;
 };

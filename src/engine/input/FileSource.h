@@ -3,14 +3,12 @@
 #include "IMediaSource.h"
 #include "engine/decoder/FFmpegDecoder.h"
 #include "engine/frame/FramePool.h"
-#include <QMediaPlayer>
-#include <QAudioOutput>
-#include <QString>
 #include <string>
 #include <thread>
 #include <atomic>
 #include <mutex>
 #include <chrono>
+#include <vector>
 
 class FileSource : public IMediaSource {
 public:
@@ -39,10 +37,15 @@ public:
     void pause() override;
     bool isPlaying() const override { return m_playing; }
 
+    // Audio routing: enable/disable submitting decoded audio to AudioEngine
+    void setAudioActive(bool active) override;
+    bool isAudioActive() const override { return m_audioActive.load(); }
+
     const std::string& filePath() const { return m_filePath; }
 
 private:
     void decodeWorkerLoop();
+    void drainAndSubmitAudio();  // Drain FFmpegDecoder audio queue → AudioEngine
 
     std::string m_filePath;
     std::atomic<bool> m_opened{false};
@@ -51,8 +54,9 @@ private:
     std::atomic<double> m_seekTarget{-1.0};
     std::atomic<float> m_volume{1.0f};
     std::atomic<bool> m_muted{false};
+    std::atomic<bool> m_audioActive{false};  // True when this is the PGM source
 
-    FFmpegDecoder m_decoder;   // Video decode only
+    FFmpegDecoder m_decoder;   // Video + Audio decode
     FramePool m_framePool;
 
     std::thread m_workerThread;
@@ -61,10 +65,6 @@ private:
     std::mutex m_frameMutex;
     std::shared_ptr<Frame> m_currentFrame;
     std::shared_ptr<Frame> m_lastValidFrame;
-
-    // Qt Multimedia — handles audio playback completely (codec, buffer, output)
-    QMediaPlayer* m_audioPlayer{nullptr};
-    QAudioOutput* m_audioOutput{nullptr};
 
     // High resolution master wall clock for video frame pacing
     std::chrono::high_resolution_clock::time_point m_playbackStartTime;

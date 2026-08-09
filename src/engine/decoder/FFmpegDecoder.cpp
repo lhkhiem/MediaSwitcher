@@ -143,6 +143,7 @@ bool FFmpegDecoder::open(const std::string& filePath) {
             m_audioCodecContext = avcodec_alloc_context3(codec);
             if (m_audioCodecContext) {
                 avcodec_parameters_to_context(m_audioCodecContext, ap);
+                if (avcodec_open2(m_audioCodecContext, codec, nullptr) >= 0) {
                     AVChannelLayout outLayout = AV_CHANNEL_LAYOUT_STEREO;
                     AVChannelLayout inLayout;
                     if (m_audioCodecContext->ch_layout.nb_channels > 0) {

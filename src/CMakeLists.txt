@@ -91,6 +91,13 @@ add_custom_command(TARGET MediaSwitcher POST_BUILD
     $<TARGET_FILE_DIR:MediaSwitcher>
 )
 
+# Copy app icon to output directory so QIcon can load it at runtime
+add_custom_command(TARGET MediaSwitcher POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_CURRENT_SOURCE_DIR}/app_icon.ico"
+    "$<TARGET_FILE_DIR:MediaSwitcher>/app_icon.ico"
+)
+
 # Deploy Qt6 DLLs to target executable post-build
 get_target_property(QT_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
 get_filename_component(QT_BIN_DIR "${QT_QMAKE_EXECUTABLE}" DIRECTORY)

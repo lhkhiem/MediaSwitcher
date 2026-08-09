@@ -7,6 +7,8 @@
 #include <QComboBox>
 #include <QLabel>
 #include <QScrollArea>
+#include <QPalette>
+#include <QColor>
 #include "engine/input/InputManager.h"
 #include "engine/input/GlobalPlaylistController.h"
 #include "FullscreenLEDWindow.h"

@@ -6,6 +6,8 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QFrame>
+#include <QPixmap>
+#include <QApplication>
 
 AboutDialog::AboutDialog(QWidget* parent)
     : QDialog(parent)
@@ -59,12 +61,19 @@ void AboutDialog::setupUi() {
 
     QLabel* iconLabel = new QLabel(this);
     iconLabel->setFixedSize(64, 64);
-    iconLabel->setText("🎥");
     iconLabel->setAlignment(Qt::AlignCenter);
+    // Use the real application icon (set in main.cpp via IDI_APPICON resource)
+    QIcon appIcon = QApplication::windowIcon();
+    if (!appIcon.isNull()) {
+        iconLabel->setPixmap(appIcon.pixmap(56, 56));
+    } else {
+        iconLabel->setText("MS");
+    }
     iconLabel->setStyleSheet(R"(
-        font-size: 40px;
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1E88E5, stop:1 #D32F2F);
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0A1628, stop:1 #1A0A2E);
         border-radius: 12px;
+        border: 1px solid #2B3A5A;
+        padding: 4px;
     )");
     headerLayout->addWidget(iconLabel);
 

@@ -166,6 +166,36 @@ void MainWindow::setupUi() {
             padding: 4px 8px;
             min-width: 180px;
         }
+        QComboBox:hover {
+            border-color: #00ACC1;
+        }
+        QComboBox::drop-down {
+            border: none;
+            width: 20px;
+        }
+        QComboBox::down-arrow {
+            image: none;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid #AAAAAA;
+            margin-right: 6px;
+        }
+        QComboBox QAbstractItemView {
+            background-color: #1E1F2E;
+            color: #FFFFFF;
+            border: 1px solid #44475A;
+            selection-background-color: #00ACC1;
+            selection-color: #FFFFFF;
+            outline: none;
+        }
+        QComboBox QAbstractItemView::item {
+            padding: 6px 10px;
+            color: #FFFFFF;
+        }
+        QComboBox QAbstractItemView::item:hover {
+            background-color: #2B2D3A;
+            color: #00E5FF;
+        }
     )");
     populateScreenSelector();
     toolbar->addWidget(m_screenSelectorCombo);
@@ -966,6 +996,11 @@ void MainWindow::setupUi() {
     scrollArea->setStyleSheet("QScrollArea { border: none; background: transparent; }");
 
     m_dockContainer = new QWidget(scrollArea);
+    // Explicitly set dark background to prevent Qt default white/light palette
+    m_dockContainer->setAutoFillBackground(true);
+    QPalette dockPalette = m_dockContainer->palette();
+    dockPalette.setColor(QPalette::Window, QColor("#161720"));
+    m_dockContainer->setPalette(dockPalette);
     m_dockLayout = new QHBoxLayout(m_dockContainer);
     m_dockLayout->setContentsMargins(0, 0, 0, 0);
     m_dockLayout->setSpacing(8);

@@ -1,5 +1,10 @@
 #include <windows.h>
 
+// Application Icon — numeric ID 101 is required for Windows Shell/taskbar to detect it.
+// Named identifiers (like IDI_APPICON) are NOT found by the Windows Shell icon scanner.
+#define IDI_APPICON 101
+IDI_APPICON ICON "app_icon.ico"
+
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION     1,0,0,0
 PRODUCTVERSION  1,0,0,0

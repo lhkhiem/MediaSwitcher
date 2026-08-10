@@ -36,10 +36,89 @@ void PlaybackManager::activateSource(PlaybackRole role, int slotId, const std::s
     LOG_INFO("PlaybackManager: Explicitly activated role instance for role={} slotId=#{}", roleName, slotId);
 }
 
+void PlaybackManager::swapRoles() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto pgmIt = m_roleInstances.find(PlaybackRole::Program);
+    auto pvwIt = m_roleInstances.find(PlaybackRole::Preview);
+
+    int oldPgmId = m_roleSlotIds.count(PlaybackRole::Program) ? m_roleSlotIds[PlaybackRole::Program] : -1;
+    int oldPvwId = m_roleSlotIds.count(PlaybackRole::Preview) ? m_roleSlotIds[PlaybackRole::Preview] : -1;
+
+    void* oldPgmPtr = (pgmIt != m_roleInstances.end() && pgmIt->second) ? pgmIt->second.get() : nullptr;
+    void* oldPvwPtr = (pvwIt != m_roleInstances.end() && pvwIt->second) ? pvwIt->second.get() : nullptr;
+
+    double oldPgmPos = (pgmIt != m_roleInstances.end() && pgmIt->second) ? pgmIt->second->positionSeconds() : 0.0;
+    double oldPvwPos = (pvwIt != m_roleInstances.end() && pvwIt->second) ? pvwIt->second->positionSeconds() : 0.0;
+
+    bool oldPgmPlaying = (pgmIt != m_roleInstances.end() && pgmIt->second) ? pgmIt->second->isPlaying() : false;
+    bool oldPvwPlaying = (pvwIt != m_roleInstances.end() && pvwIt->second) ? pvwIt->second->isPlaying() : false;
+
+    LOG_INFO("[SWAP BEFORE] PGM #{} (ptr={}) pos={:.2f}s playing={} | PVW #{} (ptr={}) pos={:.2f}s playing={}",
+             oldPgmId, oldPgmPtr, oldPgmPos, oldPgmPlaying ? "true" : "false",
+             oldPvwId, oldPvwPtr, oldPvwPos, oldPvwPlaying ? "true" : "false");
+
+    std::swap(m_roleInstances[PlaybackRole::Program], m_roleInstances[PlaybackRole::Preview]);
+    std::swap(m_roleSlotIds[PlaybackRole::Program], m_roleSlotIds[PlaybackRole::Preview]);
+    std::swap(m_pgmSlotId, m_pvwSlotId);
+
+    // Audio & Playback state normalization: Program MUST be PLAYING, Preview MUST be PAUSED
+    if (m_roleInstances[PlaybackRole::Program]) {
+        m_roleInstances[PlaybackRole::Program]->setAudioActive(true);
+        m_roleInstances[PlaybackRole::Program]->play();
+    }
+    if (m_roleInstances[PlaybackRole::Preview]) {
+        m_roleInstances[PlaybackRole::Preview]->setAudioActive(false);
+        m_roleInstances[PlaybackRole::Preview]->pause();
+    }
+
+    auto newPgmIt = m_roleInstances.find(PlaybackRole::Program);
+    auto newPvwIt = m_roleInstances.find(PlaybackRole::Preview);
+
+    void* newPgmPtr = (newPgmIt != m_roleInstances.end() && newPgmIt->second) ? newPgmIt->second.get() : nullptr;
+    void* newPvwPtr = (newPvwIt != m_roleInstances.end() && newPvwIt->second) ? newPvwIt->second.get() : nullptr;
+
+    double newPgmPos = (newPgmIt != m_roleInstances.end() && newPgmIt->second) ? newPgmIt->second->positionSeconds() : 0.0;
+    double newPvwPos = (newPvwIt != m_roleInstances.end() && newPvwIt->second) ? newPvwIt->second->positionSeconds() : 0.0;
+
+    bool newPgmPlaying = (newPgmIt != m_roleInstances.end() && newPgmIt->second) ? newPgmIt->second->isPlaying() : false;
+    bool newPvwPlaying = (newPvwIt != m_roleInstances.end() && newPvwIt->second) ? newPvwIt->second->isPlaying() : false;
+
+    LOG_INFO("[SWAP AFTER] PGM #{} (ptr={}) pos={:.2f}s playing={} | PVW #{} (ptr={}) pos={:.2f}s playing={}",
+             m_pgmSlotId, newPgmPtr, newPgmPos, newPgmPlaying ? "true" : "false",
+             m_pvwSlotId, newPvwPtr, newPvwPos, newPvwPlaying ? "true" : "false");
+}
+
 void PlaybackManager::updateState(int pgmSlotId, int pvwSlotId, int preloadSlotId,
                                    const std::unordered_map<int, std::string>& slotPaths,
                                    const std::unordered_map<int, SourceType>& slotTypes) {
     std::lock_guard<std::mutex> lock(m_mutex);
+
+    int oldPgmId = m_roleSlotIds.count(PlaybackRole::Program) ? m_roleSlotIds[PlaybackRole::Program] : -1;
+    int oldPvwId = m_roleSlotIds.count(PlaybackRole::Preview) ? m_roleSlotIds[PlaybackRole::Preview] : -1;
+
+    // Detect direct role swap condition
+    if (pgmSlotId > 0 && pvwSlotId > 0 && pgmSlotId != pvwSlotId &&
+        pgmSlotId == oldPvwId && pvwSlotId == oldPgmId) {
+
+        LOG_INFO("PlaybackManager: Handling role swap in updateState PGM #{} <-> PVW #{}", pgmSlotId, pvwSlotId);
+
+        std::swap(m_roleInstances[PlaybackRole::Program], m_roleInstances[PlaybackRole::Preview]);
+        std::swap(m_roleSlotIds[PlaybackRole::Program], m_roleSlotIds[PlaybackRole::Preview]);
+        m_pgmSlotId = pgmSlotId;
+        m_pvwSlotId = pvwSlotId;
+        m_preloadSlotId = preloadSlotId;
+
+        if (m_roleInstances[PlaybackRole::Program]) {
+            m_roleInstances[PlaybackRole::Program]->setAudioActive(true);
+            m_roleInstances[PlaybackRole::Program]->play();
+        }
+        if (m_roleInstances[PlaybackRole::Preview]) {
+            m_roleInstances[PlaybackRole::Preview]->setAudioActive(false);
+            m_roleInstances[PlaybackRole::Preview]->pause();
+        }
+        return;
+    }
 
     m_pgmSlotId = pgmSlotId;
     m_pvwSlotId = pvwSlotId;

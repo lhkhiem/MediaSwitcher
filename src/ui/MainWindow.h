@@ -5,6 +5,7 @@
 #include <QVBoxLayout>
 #include <QPushButton>
 #include <QComboBox>
+#include <QGroupBox>
 #include <QLabel>
 #include <QScrollArea>
 #include <QPalette>
@@ -35,12 +36,14 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
 
 private slots:
     void onAddVideoInput();
     void onAddPlaylistInput();
     void onQuickPlayClicked();
+    void onTakeClicked();
     void onCutClicked(bool isManualUserAction = true);
     void onFadeClicked(bool isManualUserAction = true);
     void stopGlobalPlaylistUI();
@@ -91,6 +94,9 @@ private:
     QComboBox* m_screenSelectorCombo{nullptr};
     QPushButton* m_fullscreenToggleBtn{nullptr};
 
+    QGroupBox* m_pvwGroup{nullptr};
+    QGroupBox* m_pgmGroup{nullptr};
+    QPushButton* m_takeBtn{nullptr};
     QPushButton* m_ftbBtn{nullptr};
     QSlider* m_tbarSlider{nullptr};
     bool m_isFtbActive{false};

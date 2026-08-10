@@ -80,6 +80,11 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     event->accept();
 }
 
+void MainWindow::resizeEvent(QResizeEvent* event) {
+    QMainWindow::resizeEvent(event);
+    updateViewports();
+}
+
 void MainWindow::setupUi() {
     this->setWindowTitle("MediaSwitcher - LED Screen Broadcast & Media Engine");
     this->resize(1366, 768);
@@ -237,8 +242,8 @@ void MainWindow::setupUi() {
     topLayout->setSpacing(10);
 
     // 1. PREVIEW PANEL (PVW)
-    QGroupBox* pvwGroup = new QGroupBox("PREVIEW (PVW)", centralWidget);
-    pvwGroup->setStyleSheet(R"(
+    m_pvwGroup = new QGroupBox("PREVIEW (PVW)", centralWidget);
+    m_pvwGroup->setStyleSheet(R"(
         QGroupBox {
             color: #FF9800;
             font-weight: bold;
@@ -258,15 +263,15 @@ void MainWindow::setupUi() {
             border-radius: 3px;
         }
     )");
-    QVBoxLayout* pvwLayout = new QVBoxLayout(pvwGroup);
+    QVBoxLayout* pvwLayout = new QVBoxLayout(m_pvwGroup);
     pvwLayout->setContentsMargins(4, 16, 4, 4);
 
-    m_pvwWindow = new DirectXWindow(pvwGroup);
+    m_pvwWindow = new DirectXWindow(m_pvwGroup);
     pvwLayout->addWidget(m_pvwWindow, 1); // Expand video viewport to fill space
     m_pvwWindow->initDirectX();
 
     // Broadcast Ultra-Compact Control Bar for PREVIEW
-    QWidget* pvwBarWidget = new QWidget(pvwGroup);
+    QWidget* pvwBarWidget = new QWidget(m_pvwGroup);
     pvwBarWidget->setStyleSheet(R"(
         QWidget {
             background-color: #0E0F14;
@@ -389,13 +394,36 @@ void MainWindow::setupUi() {
 
     pvwLayout->addWidget(pvwBarWidget);
 
-    topLayout->addWidget(pvwGroup, 5);
+    topLayout->addWidget(m_pvwGroup, 5);
 
     // 2. CENTER TRANSITION CONTROL PANEL
     QVBoxLayout* centerControlLayout = new QVBoxLayout();
     centerControlLayout->setAlignment(Qt::AlignCenter);
     centerControlLayout->setSpacing(8);
 
+    // Primary Broadcast TAKE Button
+    m_takeBtn = new QPushButton("TAKE", centralWidget);
+    m_takeBtn->setFixedSize(90, 48);
+    m_takeBtn->setToolTip("TAKE - Promote Preview to LIVE (PROGRAM)");
+    m_takeBtn->setStyleSheet(R"(
+        QPushButton {
+            background-color: #D32F2F;
+            color: #FFFFFF;
+            font-weight: bold;
+            font-size: 18px;
+            border: 2px solid #FF5252;
+            border-radius: 6px;
+        }
+        QPushButton:hover {
+            background-color: #F44336;
+            border-color: #FF8A80;
+        }
+        QPushButton:pressed {
+            background-color: #B71C1C;
+        }
+    )");
+    connect(m_takeBtn, &QPushButton::clicked, this, &MainWindow::onTakeClicked);
+    centerControlLayout->addWidget(m_takeBtn);
 
     // FTB Emergency Button (Fade To Black)
     m_ftbBtn = new QPushButton("FTB", centralWidget);
@@ -682,8 +710,8 @@ void MainWindow::setupUi() {
     topLayout->addWidget(audioGroup, 0);
 
     // 3. PROGRAM PANEL (PGM)
-    QGroupBox* pgmGroup = new QGroupBox("PROGRAM (PGM) - LIVE", centralWidget);
-    pgmGroup->setStyleSheet(R"(
+    m_pgmGroup = new QGroupBox("PROGRAM (PGM) - LIVE", centralWidget);
+    m_pgmGroup->setStyleSheet(R"(
         QGroupBox {
             color: #E53935;
             font-weight: bold;
@@ -703,15 +731,15 @@ void MainWindow::setupUi() {
             border-radius: 3px;
         }
     )");
-    QVBoxLayout* pgmLayout = new QVBoxLayout(pgmGroup);
+    QVBoxLayout* pgmLayout = new QVBoxLayout(m_pgmGroup);
     pgmLayout->setContentsMargins(4, 16, 4, 4);
 
-    m_pgmWindow = new DirectXWindow(pgmGroup);
+    m_pgmWindow = new DirectXWindow(m_pgmGroup);
     pgmLayout->addWidget(m_pgmWindow, 1); // Expand video viewport to fill space
     m_pgmWindow->initDirectX();
 
     // Broadcast Ultra-Compact Control Bar for PROGRAM (PGM) - LIVE
-    QWidget* pgmBarWidget = new QWidget(pgmGroup);
+    QWidget* pgmBarWidget = new QWidget(m_pgmGroup);
     pgmBarWidget->setStyleSheet(R"(
         QWidget {
             background-color: #0E0F14;
@@ -834,7 +862,7 @@ void MainWindow::setupUi() {
 
     pgmLayout->addWidget(pgmBarWidget);
 
-    topLayout->addWidget(pgmGroup, 5);
+    topLayout->addWidget(m_pgmGroup, 5);
 
     mainLayout->addLayout(topLayout, 6);
 
@@ -1061,6 +1089,33 @@ void MainWindow::populateScreenSelector() {
     }
 }
 
+static void setGroupTitleElided(QGroupBox* group, const QString& prefix, int slotId, const std::string& name) {
+    if (!group) return;
+
+    if (slotId <= 0 || name.empty()) {
+        group->setTitle(prefix);
+        group->setToolTip(prefix);
+        return;
+    }
+
+    QString fullTitle = QString("%1 - #%2 - %3")
+                            .arg(prefix)
+                            .arg(slotId)
+                            .arg(QString::fromStdString(name));
+
+    group->setToolTip(fullTitle);
+
+    int groupW = group->width();
+    int availWidth = (groupW > 60) ? (groupW - 28) : 250;
+
+    QFont font = group->font();
+    font.setBold(true);
+    QFontMetrics fm(font);
+
+    QString displayTitle = fm.elidedText(fullTitle, Qt::ElideRight, availWidth);
+    group->setTitle(displayTitle);
+}
+
 void MainWindow::updateViewports() {
     auto pvwSource = m_inputManager.previewSource();
     if (m_pvwWindow) {
@@ -1074,6 +1129,19 @@ void MainWindow::updateViewports() {
 
     if (m_ledOutputWindow) {
         m_ledOutputWindow->setMediaSource(pgmSource);
+    }
+
+    // Dynamic Viewport Titles (Bug 2 Fix: Responsive Elided Titles & Full Tooltips)
+    if (m_pvwGroup) {
+        int pvwId = m_inputManager.previewSlotId();
+        auto* pvwSlot = m_inputManager.getSlot(pvwId);
+        setGroupTitleElided(m_pvwGroup, "PREVIEW (PVW)", pvwId, pvwSlot ? pvwSlot->name : "");
+    }
+
+    if (m_pgmGroup) {
+        int pgmId = m_inputManager.programSlotId();
+        auto* pgmSlot = m_inputManager.getSlot(pgmId);
+        setGroupTitleElided(m_pgmGroup, "PROGRAM (PGM) - LIVE", pgmId, pgmSlot ? pgmSlot->name : "");
     }
 }
 
@@ -1427,11 +1495,91 @@ void MainWindow::onConfigGlobalPlaylist() {
 
 void MainWindow::onQuickPlayClicked() {
     stopGlobalPlaylistUI();
-    auto pvwSource = m_inputManager.previewSource();
-    if (pvwSource) {
-        pvwSource->play();
+    int pvwId = m_inputManager.previewSlotId();
+    int pgmId = m_inputManager.programSlotId();
+
+    if (pvwId <= 0) return;
+
+    if (pgmId <= 0) {
+        // Initial Quick Play activation: promote Preview slot to Program & play Program only
+        m_inputManager.setProgramSlot(pvwId);
+
+        auto pgmSrc = m_inputManager.programSource();
+        if (pgmSrc) {
+            pgmSrc->play();
+        }
+
+        auto pvwSrc = m_inputManager.previewSource();
+        if (pvwSrc && pvwSrc != pgmSrc) {
+            pvwSrc->pause();
+        }
+    } else {
+        // Normal Quick Play: swap roles (swapRoles normalizes PGM->play() & PVW->pause())
+        m_inputManager.swapPreviewAndProgram();
     }
-    onCutClicked(true);
+    statusBar()->showMessage(QString("Quick Play: Input #%1 is LIVE").arg(pvwId));
+}
+
+void MainWindow::onTakeClicked() {
+    stopGlobalPlaylistUI();
+
+    int pvwId = m_inputManager.previewSlotId();
+    int pgmId = m_inputManager.programSlotId();
+
+    if (pvwId <= 0) {
+        statusBar()->showMessage("No Preview source selected.");
+        return;
+    }
+
+    LOG_INFO("TAKE triggered: PVW #{} -> PGM #{} (previous PGM #{})", pvwId, pvwId, pgmId);
+
+    auto pvwSource = m_inputManager.previewSource();
+    auto pgmSource = m_inputManager.programSource();
+    double pvwPos = pvwSource ? pvwSource->positionSeconds() : 0.0;
+
+    if (pvwId == pgmId) {
+        // PVW and PGM are already the same slot ID (e.g. PVW = A @ 42s, PGM = A @ 35s)
+        // Promote Preview's prepared position (42s) to Program without swapping!
+        if (pgmSource) {
+            pgmSource->seekToSeconds(pvwPos);
+            pgmSource->play();
+        }
+        auto* slot = m_inputManager.getSlot(pvwId);
+        QString nameStr = slot ? QString::fromStdString(slot->name) : QString("Input #%1").arg(pvwId);
+        statusBar()->showMessage(QString("TAKE Switch: %1 position promoted to LIVE").arg(nameStr));
+        return;
+    }
+
+    // Promote Preview slot to Program using setProgramSlot (PGM = A, PVW = A)
+    m_inputManager.setProgramSlot(pvwId);
+
+    auto newPgmSource = m_inputManager.programSource();
+    if (newPgmSource) {
+        if (pvwPos > 0.0) {
+            newPgmSource->seekToSeconds(pvwPos);
+        }
+        newPgmSource->play();
+    }
+
+    if (pgmSource && pgmSource != newPgmSource) {
+        pgmSource->pause();
+    }
+
+    if (m_pgmWindow && newPgmSource) {
+        if (pgmSource) {
+            m_pgmWindow->renderer()->startTransition(pgmSource, newPgmSource, 1.0f);
+        }
+    }
+
+    if (m_ledOutputWindow && m_ledOutputWindow->directXWindow() && newPgmSource) {
+        if (pgmSource) {
+            m_ledOutputWindow->directXWindow()->renderer()->startTransition(pgmSource, newPgmSource, 1.0f);
+        }
+    }
+
+    auto* slot = m_inputManager.getSlot(pvwId);
+    QString nameStr = slot ? QString::fromStdString(slot->name) : QString("Input #%1").arg(pvwId);
+    statusBar()->showMessage(QString("TAKE Switch: %1 is now LIVE (PROGRAM)").arg(nameStr));
 }
 
 void MainWindow::onFTBClicked() {
@@ -1566,22 +1714,11 @@ void MainWindow::onCutClicked(bool isManualUserAction) {
     int pgmId = m_inputManager.programSlotId();
 
     if (pvwId <= 0) return;
-    if (pvwId == pgmId) return;
 
     LOG_INFO("CUT triggered: PVW #{} <-> PGM #{}", pvwId, pgmId);
 
     auto pvwSource = m_inputManager.previewSource();
     auto pgmSource = m_inputManager.programSource();
-
-    // Auto-play the Preview source from its current frame when transitioning to LIVE (PGM)
-    if (pvwSource) {
-        pvwSource->play();
-    }
-
-    // Auto-pause the former LIVE (PGM) source when it transitions back to Preview (PVW)
-    if (pgmSource && pgmSource != pvwSource) {
-        pgmSource->pause();
-    }
 
     if (m_pgmWindow && pvwSource) {
         if (pgmSource) {
@@ -1597,6 +1734,14 @@ void MainWindow::onCutClicked(bool isManualUserAction) {
 
     if (pgmId <= 0) {
         m_inputManager.setProgramSlot(pvwId);
+        auto newPgmSource = m_inputManager.programSource();
+        if (newPgmSource) {
+            newPgmSource->play();
+        }
+        auto pvwSrc = m_inputManager.previewSource();
+        if (pvwSrc && pvwSrc != newPgmSource) {
+            pvwSrc->pause();
+        }
     } else {
         m_inputManager.swapPreviewAndProgram();
     }
@@ -1613,7 +1758,6 @@ void MainWindow::onFadeClicked(bool isManualUserAction) {
     int pgmId = m_inputManager.programSlotId();
 
     if (pvwId <= 0) return;
-    if (pvwId == pgmId) return;
 
     float duration = m_fadeDurationCombo->currentData().toFloat();
     if (duration <= 0) duration = 500.0f;
@@ -1622,16 +1766,6 @@ void MainWindow::onFadeClicked(bool isManualUserAction) {
 
     auto pvwSource = m_inputManager.previewSource();
     auto pgmSource = m_inputManager.programSource();
-
-    // Auto-play the Preview source from its current frame when transitioning to LIVE (PGM)
-    if (pvwSource) {
-        pvwSource->play();
-    }
-
-    // Auto-pause the former LIVE (PGM) source when it transitions back to Preview (PVW)
-    if (pgmSource && pgmSource != pvwSource) {
-        pgmSource->pause();
-    }
 
     if (m_pgmWindow && pvwSource) {
         if (pgmSource) {
@@ -1647,9 +1781,16 @@ void MainWindow::onFadeClicked(bool isManualUserAction) {
 
     if (pgmId <= 0) {
         m_inputManager.setProgramSlot(pvwId);
+        auto newPgmSource = m_inputManager.programSource();
+        if (newPgmSource) {
+            newPgmSource->play();
+        }
+        auto pvwSrc = m_inputManager.previewSource();
+        if (pvwSrc && pvwSrc != newPgmSource) {
+            pvwSrc->pause();
+        }
     } else {
-        m_inputManager.setProgramSlot(pvwId);
-        m_inputManager.setPreviewSlot(pgmId);
+        m_inputManager.swapPreviewAndProgram();
     }
 
     statusBar()->showMessage(QString("FADE Switch (%1 ms): Input #%2 is now LIVE").arg(duration).arg(pvwId));

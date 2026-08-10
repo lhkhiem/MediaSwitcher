@@ -228,7 +228,7 @@ void InputManager::swapPreviewAndProgram() {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         std::swap(m_previewSlotId, m_programSlotId);
-        updateActivePlaybackInstances();
+        m_playbackManager.swapRoles();
     }
     LOG_INFO("InputManager: Swapped PVW (#{}) and PGM (#{})", m_previewSlotId, m_programSlotId);
     if (m_onPreviewChanged) m_onPreviewChanged();

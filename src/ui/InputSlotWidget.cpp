@@ -111,20 +111,39 @@ void InputSlotWidget::paintEvent(QPaintEvent *event) {
         painter.drawText(liveBadgeRect, Qt::AlignCenter, "LIVE");
     }
 
-    // 3. Top-Left Channel Number Badge
-    int badgeW = (h < 85) ? 18 : 22;
+    // 3. Top-Left State Badge (IDLE, PVW, PGM, PVW+PGM)
+    QString badgeText;
+    QColor badgeBg;
+    int badgeW = 22;
     int badgeH = (h < 85) ? 14 : 16;
-    QRect badgeRect(3, 3, badgeW, badgeH);
 
-    QColor badgeBg = m_isPgm ? QColor(229, 57, 53) : (m_isPvw ? QColor(255, 152, 0) : QColor(0, 0, 0, 200));
+    if (m_isPgm && m_isPvw) {
+        badgeText = "PVW+PGM";
+        badgeBg = QColor(255, 110, 0); // Amber/Gold #FF6E00
+        badgeW = (h < 85) ? 48 : 56;
+    } else if (m_isPgm) {
+        badgeText = "PGM";
+        badgeBg = QColor(229, 57, 53); // Red #E53935
+        badgeW = (h < 85) ? 28 : 32;
+    } else if (m_isPvw) {
+        badgeText = "PVW";
+        badgeBg = QColor(255, 152, 0); // Orange #FF9800
+        badgeW = (h < 85) ? 28 : 32;
+    } else {
+        badgeText = QString::number(m_slotId);
+        badgeBg = QColor(28, 30, 42, 220); // Dark Slate #1C1E2A
+        badgeW = (h < 85) ? 18 : 22;
+    }
+
+    QRect badgeRect(3, 3, badgeW, badgeH);
     painter.fillRect(badgeRect, badgeBg);
 
     painter.setPen(QColor(255, 255, 255));
     QFont badgeFont = painter.font();
     badgeFont.setBold(true);
-    badgeFont.setPixelSize(h < 85 ? 9 : 10);
+    badgeFont.setPixelSize(h < 85 ? 8 : 10);
     painter.setFont(badgeFont);
-    painter.drawText(badgeRect, Qt::AlignCenter, QString::number(m_slotId));
+    painter.drawText(badgeRect, Qt::AlignCenter, badgeText);
 
     // 4. Bottom Dark Gradient Overlay for Name Readability
     QLinearGradient grad(0, h * 0.4, 0, h);
@@ -158,16 +177,16 @@ void InputSlotWidget::paintEvent(QPaintEvent *event) {
     // 6. Card Border
     QPen pen;
     if (m_isPgm && m_isPvw) {
-        pen.setColor(QColor(255, 110, 0)); // Amber-Red for PVW+PGM
+        pen.setColor(QColor(255, 110, 0)); // Amber/Gold #FF6E00 for PVW+PGM
         pen.setWidth(3);
     } else if (m_isPgm) {
-        pen.setColor(QColor(229, 57, 53)); // Red for PGM
+        pen.setColor(QColor(229, 57, 53)); // Red #E53935 for PGM
         pen.setWidth(3);
     } else if (m_isPvw) {
-        pen.setColor(QColor(255, 152, 0)); // Orange for PVW
+        pen.setColor(QColor(255, 152, 0)); // Orange #FF9800 for PVW
         pen.setWidth(3);
     } else {
-        pen.setColor(QColor(58, 61, 82));  // Dark Grey Slate
+        pen.setColor(QColor(58, 61, 82));  // Dark Grey Slate #3A3D52 for IDLE
         pen.setWidth(1);
     }
 

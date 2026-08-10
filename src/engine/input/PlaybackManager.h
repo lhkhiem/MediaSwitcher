@@ -22,6 +22,9 @@ public:
                      const std::unordered_map<int, std::string>& slotPaths,
                      const std::unordered_map<int, SourceType>& slotTypes);
 
+    // Atomically swap role instances between Preview and Program without recreating FileSource objects.
+    void swapRoles();
+
     // Set a slot to be preloaded in background lazily
     void preloadSlot(int slotId, const std::string& filePath, SourceType type);
 

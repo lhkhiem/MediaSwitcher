@@ -5,12 +5,9 @@
 #include <QPaintEvent>
 #include <QMouseEvent>
 #include <QEnterEvent>
-#include <QTimer>
-#include <QSlider>
 #include <QPushButton>
 #include "engine/input/InputSlot.h"
-#include "engine/input/IMediaSource.h"
-#include <memory>
+#include <string>
 
 class InputSlotWidget : public QWidget {
     Q_OBJECT
@@ -35,13 +32,9 @@ protected:
 private:
     int m_slotId{-1};
     std::string m_name;
+    SourceType m_type{SourceType::ColorBars};
     QImage m_thumbnail;
-    std::shared_ptr<IMediaSource> m_source{nullptr};
     bool m_isPvw{false};
     bool m_isPgm{false};
-    QTimer* m_refreshTimer{nullptr};
-    QPushButton* m_playBtn{nullptr};
-    QPushButton* m_audioBtn{nullptr};
-    QSlider* m_volSlider{nullptr};
     QPushButton* m_closeBtn{nullptr};
 };

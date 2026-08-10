@@ -6,111 +6,13 @@ InputSlotWidget::InputSlotWidget(const InputSlot& slot, bool isPvw, bool isPgm, 
     : QWidget(parent)
     , m_slotId(slot.id)
     , m_name(slot.name)
+    , m_type(slot.type)
     , m_thumbnail(slot.thumbnail)
-    , m_source(slot.source)
     , m_isPvw(isPvw)
     , m_isPgm(isPgm)
 {
     this->setFixedSize(160, 100);
     this->setCursor(Qt::PointingHandCursor);
-
-    m_playBtn = new QPushButton(this);
-    m_playBtn->setFixedSize(22, 22);
-    m_playBtn->move(160 - 26, 100 - 26);
-    m_playBtn->setCursor(Qt::PointingHandCursor);
-    m_playBtn->setToolTip("Play/Pause Channel");
-    m_playBtn->setStyleSheet(R"(
-        QPushButton {
-            background-color: rgba(20, 20, 28, 200);
-            color: #FFFFFF;
-            font-size: 10px;
-            font-weight: bold;
-            border: 1px solid #FF9800;
-            border-radius: 11px;
-        }
-        QPushButton:hover {
-            background-color: #FF9800;
-            color: #000000;
-        }
-    )");
-
-    connect(m_playBtn, &QPushButton::clicked, this, [this]() {
-        if (m_source) {
-            if (m_source->isPlaying()) {
-                m_source->pause();
-            } else {
-                m_source->play();
-            }
-        }
-    });
-
-    m_audioBtn = new QPushButton("🔊", this);
-    m_audioBtn->setFixedSize(22, 22);
-    m_audioBtn->move(160 - 52, 100 - 26);
-    m_audioBtn->setCursor(Qt::PointingHandCursor);
-    m_audioBtn->setToolTip("Audio Mute / Unmute");
-    m_audioBtn->setStyleSheet(R"(
-        QPushButton {
-            background-color: rgba(20, 20, 28, 200);
-            color: #29B6F6;
-            font-size: 10px;
-            font-weight: bold;
-            border: 1px solid #0288D1;
-            border-radius: 11px;
-        }
-        QPushButton:hover {
-            background-color: #0288D1;
-            color: #FFFFFF;
-        }
-    )");
-
-    connect(m_audioBtn, &QPushButton::clicked, this, [this]() {
-        if (m_source) {
-            bool currentMute = m_source->isMuted();
-            m_source->setMuted(!currentMute);
-            m_audioBtn->setText(!currentMute ? "🔇" : "🔊");
-            m_audioBtn->setStyleSheet(!currentMute ? R"(
-                QPushButton {
-                    background-color: rgba(180, 20, 20, 220);
-                    color: #FFFFFF;
-                    font-size: 10px;
-                    border: 1px solid #E53935;
-                    border-radius: 11px;
-                }
-            )" : R"(
-                QPushButton {
-                    background-color: rgba(20, 20, 28, 200);
-                    color: #29B6F6;
-                    font-size: 10px;
-                    border: 1px solid #0288D1;
-                    border-radius: 11px;
-                }
-            )");
-        }
-    });
-
-    m_volSlider = new QSlider(Qt::Horizontal, this);
-    m_volSlider->setRange(0, 100);
-    int initVol = m_source ? static_cast<int>(m_source->volume() * 100.0f) : 100;
-    m_volSlider->setValue(initVol);
-    m_volSlider->setFixedSize(48, 14);
-    m_volSlider->move(160 - 104, 100 - 22);
-    m_volSlider->setCursor(Qt::PointingHandCursor);
-    m_volSlider->setToolTip("Channel Volume Fader (0-100%)");
-    m_volSlider->setStyleSheet(R"(
-        QSlider::groove:horizontal { height: 3px; background: #1C1E2A; border-radius: 1px; }
-        QSlider::sub-page:horizontal { background: #29B6F6; border-radius: 1px; }
-        QSlider::handle:horizontal {
-            background: #FFFFFF; border: 1px solid #0288D1; width: 8px; height: 8px;
-            margin-top: -3px; margin-bottom: -3px; border-radius: 4px;
-        }
-    )");
-
-    connect(m_volSlider, &QSlider::valueChanged, this, [this](int val) {
-        if (m_source) {
-            m_source->setVolume(static_cast<float>(val) / 100.0f);
-        }
-    });
 
     m_closeBtn = new QPushButton("✕", this);
     m_closeBtn->setFixedSize(18, 18);
@@ -134,33 +36,11 @@ InputSlotWidget::InputSlotWidget(const InputSlot& slot, bool isPvw, bool isPgm, 
     connect(m_closeBtn, &QPushButton::clicked, this, [this]() {
         emit removeRequested(m_slotId);
     });
-
-    m_refreshTimer = new QTimer(this);
-    connect(m_refreshTimer, &QTimer::timeout, this, [this]() {
-        if (this->isVisible()) {
-            this->update();
-        }
-    });
-    m_refreshTimer->start(33); // Refresh thumbnail at ~30 FPS
 }
 
 void InputSlotWidget::setCardSize(int w, int h) {
     this->setFixedSize(w, h);
-    int btnS = (h < 85) ? 18 : 22;
 
-    if (m_playBtn) {
-        m_playBtn->setFixedSize(btnS, btnS);
-        m_playBtn->move(w - btnS - 4, h - btnS - 4);
-    }
-    if (m_audioBtn) {
-        m_audioBtn->setFixedSize(btnS, btnS);
-        m_audioBtn->move(w - (btnS * 2) - 8, h - btnS - 4);
-    }
-    if (m_volSlider) {
-        int sliderW = (w > 140) ? 48 : 36;
-        m_volSlider->setFixedSize(sliderW, 14);
-        m_volSlider->move(w - (btnS * 2) - sliderW - 12, h - 20);
-    }
     if (m_closeBtn) {
         int closeS = (h < 85) ? 15 : 18;
         m_closeBtn->setFixedSize(closeS, closeS);
@@ -189,26 +69,49 @@ void InputSlotWidget::paintEvent(QPaintEvent *event) {
     int w = width();
     int h = height();
 
-    // 1. Draw Live Playing Thumbnail from Source
-    bool drewLiveFrame = false;
-    if (m_source) {
-        auto frame = m_source->getFrame();
-        if (frame && frame->data() && frame->width() > 0 && frame->height() > 0) {
-            QImage img(frame->data(), frame->width(), frame->height(), QImage::Format_RGBA8888);
-            painter.drawImage(rect(), img);
-            drewLiveFrame = true;
-        }
+    // 1. Render Static Thumbnail Background
+    if (!m_thumbnail.isNull()) {
+        painter.drawImage(rect(), m_thumbnail);
+    } else {
+        painter.fillRect(rect(), QColor(28, 30, 42));
+
+        // Center Icon fallback if thumbnail not ready
+        painter.setPen(QColor(120, 130, 150));
+        QFont iconFont = painter.font();
+        iconFont.setPixelSize(h < 85 ? 18 : 24);
+        painter.setFont(iconFont);
+        const char* fallbackIcon = (m_type == SourceType::ImageFile) ? "🖼" : ((m_type == SourceType::VideoFile) ? "🎬" : "🎨");
+        painter.drawText(rect(), Qt::AlignCenter, fallbackIcon);
     }
 
-    if (!drewLiveFrame) {
-        if (!m_thumbnail.isNull()) {
-            painter.drawImage(rect(), m_thumbnail);
-        } else {
-            painter.fillRect(rect(), QColor(34, 36, 51));
-        }
+    // 2. Center Static Play Overlay for VIDEO ONLY
+    if (m_type == SourceType::VideoFile) {
+        int playIconSize = (h < 85) ? 22 : 28;
+        QRect playRect((w - playIconSize) / 2, (h - playIconSize) / 2 - 4, playIconSize, playIconSize);
+        
+        painter.setBrush(QColor(20, 24, 38, 160));
+        painter.setPen(QColor(255, 255, 255, 200));
+        painter.drawEllipse(playRect);
+
+        QFont playFont = painter.font();
+        playFont.setBold(true);
+        playFont.setPixelSize(h < 85 ? 10 : 12);
+        painter.setFont(playFont);
+        painter.setPen(QColor(255, 255, 255));
+        painter.drawText(playRect.adjusted(2, 0, 0, 0), Qt::AlignCenter, "▶");
+    } else if (m_type == SourceType::RTSPStream) {
+        // RTSP LIVE Badge
+        QRect liveBadgeRect(w - 55, h - 22, 50, 16);
+        painter.fillRect(liveBadgeRect, QColor(229, 57, 53, 220));
+        painter.setPen(QColor(255, 255, 255));
+        QFont liveFont = painter.font();
+        liveFont.setBold(true);
+        liveFont.setPixelSize(9);
+        painter.setFont(liveFont);
+        painter.drawText(liveBadgeRect, Qt::AlignCenter, "LIVE");
     }
 
-    // 2. Draw Top-Left Channel Number Badge
+    // 3. Top-Left Channel Number Badge
     int badgeW = (h < 85) ? 18 : 22;
     int badgeH = (h < 85) ? 14 : 16;
     QRect badgeRect(3, 3, badgeW, badgeH);
@@ -223,13 +126,13 @@ void InputSlotWidget::paintEvent(QPaintEvent *event) {
     painter.setFont(badgeFont);
     painter.drawText(badgeRect, Qt::AlignCenter, QString::number(m_slotId));
 
-    // 3. Draw Bottom Dark Gradient for Text Readability ONLY
-    QLinearGradient grad(0, h * 0.5, 0, h);
+    // 4. Bottom Dark Gradient Overlay for Name Readability
+    QLinearGradient grad(0, h * 0.4, 0, h);
     grad.setColorAt(0.0, QColor(0, 0, 0, 0));
-    grad.setColorAt(1.0, QColor(0, 0, 0, 220));
-    painter.fillRect(QRect(0, h / 2, w, h / 2), grad);
+    grad.setColorAt(1.0, QColor(0, 0, 0, 230));
+    painter.fillRect(QRect(0, static_cast<int>(h * 0.4), w, static_cast<int>(h * 0.6)), grad);
 
-    // 4. Draw Badge Text Overlay
+    // 5. Source Name & Type Text Overlay
     QString statusBadge = "";
     if (m_isPgm && m_isPvw) {
         statusBadge = " [PVW/PGM]";
@@ -239,34 +142,20 @@ void InputSlotWidget::paintEvent(QPaintEvent *event) {
         statusBadge = " [PVW]";
     }
 
-    QString text = QString("%1%2").arg(QString::fromStdString(m_name)).arg(statusBadge);
-    
+    const char* typePrefix = (m_type == SourceType::ImageFile) ? "🖼 " : ((m_type == SourceType::VideoFile) ? "🎬 " : "🎨 ");
+    QString text = QString("%1%2%3").arg(typePrefix).arg(QString::fromStdString(m_name)).arg(statusBadge);
+
     QFont font = painter.font();
     font.setBold(true);
     font.setPixelSize(h < 85 ? 9 : 11);
     painter.setFont(font);
 
     painter.setPen(QColor(255, 255, 255));
-    int textWidthLimit = w - 108;
-    if (textWidthLimit < 30) textWidthLimit = 30;
-    QRect textRect = (h < 85) ? QRect(4, h - 20, textWidthLimit, 18) : QRect(6, h - 28, textWidthLimit, 24);
+    int textWidthLimit = w - 12;
+    QRect textRect = (h < 85) ? QRect(4, h - 18, textWidthLimit, 16) : QRect(6, h - 22, textWidthLimit, 18);
     painter.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, text);
 
-    // 5. Update Overlay Controls State
-    if (m_playBtn && m_source) {
-        if (m_source->isPlaying()) {
-            m_playBtn->setText("⏸");
-        } else {
-            m_playBtn->setText("▶");
-        }
-    }
-
-    if (m_audioBtn && m_source) {
-        bool muted = m_source->isMuted();
-        m_audioBtn->setText(muted ? "🔇" : "🔊");
-    }
-
-    // 6. Draw Slot Border
+    // 6. Card Border
     QPen pen;
     if (m_isPgm && m_isPvw) {
         pen.setColor(QColor(255, 110, 0)); // Amber-Red for PVW+PGM
@@ -278,7 +167,7 @@ void InputSlotWidget::paintEvent(QPaintEvent *event) {
         pen.setColor(QColor(255, 152, 0)); // Orange for PVW
         pen.setWidth(3);
     } else {
-        pen.setColor(QColor(58, 61, 82));  // Dark Grey
+        pen.setColor(QColor(58, 61, 82));  // Dark Grey Slate
         pen.setWidth(1);
     }
 

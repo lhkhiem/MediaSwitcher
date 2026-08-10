@@ -132,6 +132,9 @@ private:
 
     QTimer* m_playbackTimer{nullptr};
 
+    // Debug Resource Metrics Panel Label
+    QLabel* m_metricsLabel{nullptr};
+
     // Tracks which source is currently outputting audio to AudioEngine
     std::shared_ptr<IMediaSource> m_pgmAudioSource;
 };

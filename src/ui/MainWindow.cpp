@@ -10,6 +10,8 @@
 #include "engine/audio/AudioEngine.h"
 #include "common/logger/Logger.h"
 #include <chrono>
+#include <windows.h>
+#include <psapi.h>
 
 #include <QMenuBar>
 #include <QToolBar>
@@ -1031,6 +1033,10 @@ void MainWindow::setupUi() {
         }
     )");
     connect(copyrightBtn, &QPushButton::clicked, this, &MainWindow::onShowAboutDialog);
+    m_metricsLabel = new QLabel(this);
+    m_metricsLabel->setStyleSheet("QLabel { color: #4FC3F7; font-weight: bold; font-size: 11px; margin-right: 16px; }");
+    statusBar()->addPermanentWidget(m_metricsLabel);
+
     statusBar()->addPermanentWidget(copyrightBtn);
 }
 
@@ -1745,6 +1751,25 @@ void MainWindow::updatePlaybackStatus() {
         if (m_playlistController.checkAdvance(pgmPos, pgmDur, pgmId, pgmIsPlaying)) {
             advancePlaylistStep();
         }
+    }
+
+    // 0. Update Debug Resource Metrics Panel
+    if (m_metricsLabel) {
+        PROCESS_MEMORY_COUNTERS pmc;
+        size_t ramMb = 0;
+        if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+            ramMb = pmc.WorkingSetSize / (1024 * 1024);
+        }
+        size_t totalSources = m_inputManager.inputSlots().size();
+        size_t activeDecoders = m_inputManager.activeDecoderCount();
+        int preloadId = m_inputManager.preloadSlotId();
+
+        QString preloadStr = (preloadId > 0) ? QString(" [Preload #%1]").arg(preloadId) : "";
+        m_metricsLabel->setText(QString("📊 Sources: %1 | Active Decoders: %2/3%3 | RAM: ~%4 MB")
+                                .arg(totalSources)
+                                .arg(activeDecoders)
+                                .arg(preloadStr)
+                                .arg(ramMb));
     }
 
     // 1. PREVIEW (PVW) Status

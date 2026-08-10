@@ -96,13 +96,20 @@ void FileSource::seekToSeconds(double seconds) {
 }
 
 void FileSource::loopToBeginning() {
+    if (m_decoder.hasAudio()) {
+        std::vector<float> pcm;
+        m_decoder.drainAudio(pcm);
+        if (!pcm.empty() && m_audioActive.load()) {
+            float vol = m_muted.load() ? 0.0f : m_volume.load();
+            if (std::abs(vol - 1.0f) > 0.001f) {
+                for (auto& s : pcm) s *= vol;
+            }
+            AudioEngine::instance().submitAudioSamples(pcm.data(), pcm.size() / 2);
+        }
+    }
+
     m_decoder.seekToBeginning();
     m_clockInitialized = false;
-
-    // Clear stale audio from AudioEngine so the looped audio starts cleanly
-    if (m_audioActive.load()) {
-        AudioEngine::instance().clearAudioBuffer();
-    }
 }
 
 // ---------------------------------------------------------------------------

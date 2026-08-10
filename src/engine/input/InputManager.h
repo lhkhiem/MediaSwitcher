@@ -1,15 +1,18 @@
 #pragma once
 
 #include "InputSlot.h"
+#include "SourceRegistry.h"
 #include <vector>
 #include <mutex>
 #include <memory>
 #include <functional>
+#include <QObject>
 
-class InputManager {
+class InputManager : public QObject {
+    Q_OBJECT
 public:
     InputManager();
-    ~InputManager();
+    ~InputManager() override;
 
     int addColorBarsSlot(const std::string& name = "Color Bars");
     int addFileSlot(const std::string& filePath, const std::string& name = "");
@@ -34,8 +37,11 @@ public:
     void setOnProgramChanged(InputChangeCallback cb) { m_onProgramChanged = cb; }
 
 private:
+    void updateActivePlaybackInstances();
+
     std::mutex m_mutex;
     std::vector<InputSlot> m_slots;
+    SourceRegistry m_registry;
     int m_nextId{1};
 
     int m_previewSlotId{-1};

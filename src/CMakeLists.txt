@@ -42,6 +42,11 @@ set(SOURCES
     engine/frame/FramePool.cpp
     engine/frame/FramePool.h
     engine/input/IMediaSource.h
+    engine/input/SourceInfo.h
+    engine/input/SourceRegistry.h
+    engine/input/SourceRegistry.cpp
+    engine/input/ThumbnailGenerator.h
+    engine/input/ThumbnailGenerator.cpp
     engine/input/InputSlot.h
     engine/input/InputManager.cpp
     engine/input/InputManager.h

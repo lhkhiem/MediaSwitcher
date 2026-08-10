@@ -1,12 +1,25 @@
 #include "InputManager.h"
 #include "ColorBarsSource.h"
 #include "FileSource.h"
-#include "engine/decoder/FFmpegDecoder.h"
+#include "ThumbnailGenerator.h"
 #include "common/logger/Logger.h"
 #include <filesystem>
+#include <algorithm>
 
 InputManager::InputManager() {
-    // Start empty without default ColorBars test pattern
+    connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailReady,
+            this, [this](int sourceId, QImage thumb) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_registry.updateThumbnail(sourceId, thumb);
+        auto* slot = getSlot(sourceId);
+        if (slot) {
+            slot->thumbnail = thumb;
+            slot->thumbnailReady = true;
+        }
+        if (m_onInputListChanged) {
+            m_onInputListChanged();
+        }
+    });
 }
 
 InputManager::~InputManager() {
@@ -14,9 +27,37 @@ InputManager::~InputManager() {
     for (auto& slot : m_slots) {
         if (slot.source) {
             slot.source->close();
+            slot.source.reset();
         }
     }
     m_slots.clear();
+    m_registry.clear();
+}
+
+void InputManager::updateActivePlaybackInstances() {
+    for (auto& slot : m_slots) {
+        bool isActive = (slot.id == m_previewSlotId || slot.id == m_programSlotId);
+
+        if (isActive) {
+            if (slot.type != InputType::ColorBars && !slot.source) {
+                slot.source = std::make_shared<FileSource>(slot.filePath);
+                slot.source->open();
+                slot.state = SourceState::Playing;
+                LOG_INFO("InputManager: Created active PlaybackInstance for slot #{} '{}'", slot.id, slot.name);
+            }
+            if (slot.source) {
+                bool isPgm = (slot.id == m_programSlotId);
+                slot.source->setAudioActive(isPgm);
+            }
+        } else {
+            if (slot.type != InputType::ColorBars && slot.source) {
+                slot.source->close();
+                slot.source.reset();
+                slot.state = SourceState::Idle;
+                LOG_INFO("InputManager: Evicted idle PlaybackInstance for slot #{} '{}' (0 decoders/threads)", slot.id, slot.name);
+            }
+        }
+    }
 }
 
 int InputManager::addColorBarsSlot(const std::string& name) {
@@ -31,13 +72,26 @@ int InputManager::addColorBarsSlot(const std::string& name) {
     auto frame = slot.source->getFrame();
     if (frame && frame->data() && frame->width() > 0 && frame->height() > 0) {
         QImage img(frame->data(), frame->width(), frame->height(), QImage::Format_RGBA8888);
-        slot.thumbnail = img.copy();
+        slot.thumbnail = img.scaled(320, 180, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        slot.thumbnailReady = true;
     }
+
+    SourceInfo info;
+    info.id = slot.id;
+    info.name = slot.name;
+    info.type = slot.type;
+    info.thumbnail = slot.thumbnail;
+    info.thumbnailReady = true;
+    m_registry.addSource(info);
 
     m_slots.push_back(slot);
     int newId = slot.id;
 
-    m_previewSlotId = newId;
+    if (m_previewSlotId == -1) {
+        m_previewSlotId = newId;
+    }
+
+    updateActivePlaybackInstances();
 
     if (m_onInputListChanged) m_onInputListChanged();
     if (m_onPreviewChanged) m_onPreviewChanged();
@@ -50,7 +104,7 @@ int InputManager::addFileSlot(const std::string& filePath, const std::string& na
     std::lock_guard<std::mutex> lock(m_mutex);
     InputSlot slot;
     slot.id = m_nextId++;
-    
+
     std::filesystem::path p(filePath);
     if (name.empty()) {
         slot.name = p.filename().string();
@@ -66,39 +120,30 @@ int InputManager::addFileSlot(const std::string& filePath, const std::string& na
         slot.type = InputType::VideoFile;
     }
     slot.filePath = filePath;
+    slot.state = SourceState::Idle;
+    slot.source = nullptr; // ZERO persistent decoders/threads in Idle state
 
-    // 1. Extract static poster thumbnail synchronously without interfering with FileSource queue
-    {
-        FFmpegDecoder thumbDecoder;
-        if (thumbDecoder.open(filePath)) {
-            Frame f(1280, 720, PixelFormat::RGBA32);
-            for (int i = 0; i < 15; ++i) {
-                if (thumbDecoder.decodeNextFrame(f) && f.data() && f.width() > 0 && f.height() > 0) {
-                    QImage img(f.data(), f.width(), f.height(), QImage::Format_RGBA8888);
-                    slot.thumbnail = img.copy();
+    SourceInfo info;
+    info.id = slot.id;
+    info.name = slot.name;
+    info.filePath = slot.filePath;
+    info.type = slot.type;
+    info.state = SourceState::Idle;
+    m_registry.addSource(info);
 
-                    int w = img.width();
-                    int h = img.height();
-                    QRgb centerPix = img.pixel(w / 2, h / 2);
-                    if (qRed(centerPix) + qGreen(centerPix) + qBlue(centerPix) > 25) {
-                        break; // Found clear non-black poster frame
-                    }
-                }
-            }
-            thumbDecoder.close();
-        }
-    }
-
-    // 2. Instantiate live FileSource for PREVIEW & PROGRAM playback
-    slot.source = std::make_shared<FileSource>(filePath);
-    slot.source->open();
+    // Request 320x180 thumbnail extraction asynchronously
+    ThumbnailGenerator::instance().requestThumbnail(slot.id, filePath, slot.type);
 
     m_slots.push_back(slot);
     int newId = slot.id;
 
-    m_previewSlotId = newId;
+    if (m_previewSlotId == -1) {
+        m_previewSlotId = newId;
+    }
 
-    LOG_INFO("InputManager: Added video slot #{} '{}'", newId, slot.name);
+    updateActivePlaybackInstances();
+
+    LOG_INFO("InputManager: Registered slot #{} '{}' (IDLE state, 0 decoders)", newId, slot.name);
 
     if (m_onInputListChanged) m_onInputListChanged();
     if (m_onPreviewChanged) m_onPreviewChanged();
@@ -112,18 +157,24 @@ bool InputManager::removeSlot(int slotId) {
     });
 
     if (it != m_slots.end()) {
-        if (it->source) it->source->close();
+        if (it->source) {
+            it->source->close();
+            it->source.reset();
+        }
+        m_registry.removeSource(slotId);
         m_slots.erase(it);
 
         if (m_previewSlotId == slotId) {
             m_previewSlotId = m_slots.empty() ? -1 : m_slots.front().id;
-            if (m_onPreviewChanged) m_onPreviewChanged();
         }
         if (m_programSlotId == slotId) {
             m_programSlotId = m_slots.empty() ? -1 : m_slots.front().id;
-            if (m_onProgramChanged) m_onProgramChanged();
         }
 
+        updateActivePlaybackInstances();
+
+        if (m_onPreviewChanged) m_onPreviewChanged();
+        if (m_onProgramChanged) m_onProgramChanged();
         if (m_onInputListChanged) m_onInputListChanged();
         return true;
     }
@@ -141,6 +192,7 @@ void InputManager::setPreviewSlot(int slotId) {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_previewSlotId = slotId;
+        updateActivePlaybackInstances();
     }
     LOG_INFO("InputManager: Preview switched to slot #{}", slotId);
     if (m_onPreviewChanged) m_onPreviewChanged();
@@ -150,6 +202,7 @@ void InputManager::setProgramSlot(int slotId) {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_programSlotId = slotId;
+        updateActivePlaybackInstances();
     }
     LOG_INFO("InputManager: Program switched to slot #{}", slotId);
     if (m_onProgramChanged) m_onProgramChanged();
@@ -159,6 +212,7 @@ void InputManager::swapPreviewAndProgram() {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         std::swap(m_previewSlotId, m_programSlotId);
+        updateActivePlaybackInstances();
     }
     LOG_INFO("InputManager: Swapped PVW (#{}) and PGM (#{})", m_previewSlotId, m_programSlotId);
     if (m_onPreviewChanged) m_onPreviewChanged();

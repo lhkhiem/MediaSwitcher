@@ -1356,25 +1356,24 @@ void MainWindow::onPauseGlobalPlaylist() {
 
 void MainWindow::onPlaylistPrevClicked() {
     if (!m_playlistController.isActive()) return;
-    m_playlistController.prevStep();
-    advancePlaylistStep();
-    statusBar()->showMessage("Playlist: Jumped to Previous Track.");
+    if (m_playlistController.previous()) {
+        activatePlaylistCurrentStep();
+        statusBar()->showMessage("Playlist: Jumped to Previous Track.");
+    }
 }
 
 void MainWindow::onPlaylistNextClicked() {
     if (!m_playlistController.isActive()) return;
-    m_playlistController.nextStepManual();
-    advancePlaylistStep();
-    statusBar()->showMessage("Playlist: Jumped to Next Track.");
+    if (m_playlistController.advance(true)) {
+        activatePlaylistCurrentStep();
+        statusBar()->showMessage("Playlist: Jumped to Next Track.");
+    }
 }
 
-void MainWindow::advancePlaylistStep() {
+void MainWindow::activatePlaylistCurrentStep() {
     auto currentStep = m_playlistController.currentStep();
     int targetSlotId = currentStep.slotId;
     if (targetSlotId <= 0) return;
-
-    int currentPgmId = m_inputManager.programSlotId();
-    if (targetSlotId == currentPgmId) return;
 
     auto currentPgmSource = m_inputManager.programSource();
 
@@ -1406,7 +1405,7 @@ void MainWindow::advancePlaylistStep() {
         currentPgmSource->pause();
     }
 
-    m_playlistController.resetStepTimer();
+    m_playlistController.completeTransition();
 }
 
 void MainWindow::onConfigGlobalPlaylist() {
@@ -1746,10 +1745,12 @@ void MainWindow::updatePlaybackStatus() {
         double pgmPos = pgmSrc ? pgmSrc->positionSeconds() : 0.0;
         double pgmDur = pgmSrc ? pgmSrc->durationSeconds() : 0.0;
         bool pgmIsPlaying = pgmSrc ? pgmSrc->isPlaying() : false;
-        int pgmId = m_inputManager.programSlotId();
+        bool pgmAtEof = pgmSrc ? pgmSrc->isEof() : false;
 
-        if (m_playlistController.checkAdvance(pgmPos, pgmDur, pgmId, pgmIsPlaying)) {
-            advancePlaylistStep();
+        if (m_playlistController.isCurrentItemFinished(pgmPos, pgmDur, pgmIsPlaying, pgmAtEof)) {
+            if (m_playlistController.advance(false)) {
+                activatePlaylistCurrentStep();
+            }
         }
     }
 

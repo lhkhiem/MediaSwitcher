@@ -76,7 +76,7 @@ private slots:
 private:
     void setupUi();
     void populateScreenSelector();
-    void advancePlaylistStep();
+    void activatePlaylistCurrentStep();
 
     DirectXWindow* m_pvwWindow{nullptr};
     DirectXWindow* m_pgmWindow{nullptr};

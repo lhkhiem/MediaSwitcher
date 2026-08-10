@@ -32,6 +32,7 @@ public:
     virtual void play() {}
     virtual void pause() {}
     virtual bool isPlaying() const { return true; }
+    virtual bool isEof() const { return false; }
 
     // Audio routing: only the active PGM source should submit audio to AudioEngine
     virtual void setAudioActive(bool active) { (void)active; }

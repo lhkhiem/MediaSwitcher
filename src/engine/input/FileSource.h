@@ -41,6 +41,7 @@ public:
     void play() override;
     void pause() override;
     bool isPlaying() const override { return m_playing; }
+    bool isEof() const override { return m_decoder.atFormatEof(); }
 
     // Audio routing: enable/disable submitting decoded audio to AudioEngine
     void setAudioActive(bool active) override;

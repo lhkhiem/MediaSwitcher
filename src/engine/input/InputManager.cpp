@@ -24,8 +24,9 @@ InputManager::InputManager() {
 
 InputManager::~InputManager() {
     std::lock_guard<std::mutex> lock(m_mutex);
+    m_playbackManager.clear();
     for (auto& slot : m_slots) {
-        if (slot.source) {
+        if (slot.source && slot.type == InputType::ColorBars) {
             slot.source->close();
             slot.source.reset();
         }
@@ -35,27 +36,26 @@ InputManager::~InputManager() {
 }
 
 void InputManager::updateActivePlaybackInstances() {
-    for (auto& slot : m_slots) {
-        bool isActive = (slot.id == m_previewSlotId || slot.id == m_programSlotId);
+    std::unordered_map<int, std::string> slotPaths;
+    std::unordered_map<int, SourceType> slotTypes;
 
-        if (isActive) {
-            if (slot.type != InputType::ColorBars && !slot.source) {
-                slot.source = std::make_shared<FileSource>(slot.filePath);
-                slot.source->open();
-                slot.state = SourceState::Playing;
-                LOG_INFO("InputManager: Created active PlaybackInstance for slot #{} '{}'", slot.id, slot.name);
-            }
-            if (slot.source) {
-                bool isPgm = (slot.id == m_programSlotId);
-                slot.source->setAudioActive(isPgm);
-            }
+    for (const auto& slot : m_slots) {
+        slotPaths[slot.id] = slot.filePath;
+        slotTypes[slot.id] = slot.type;
+    }
+
+    m_playbackManager.updateState(m_programSlotId, m_previewSlotId, m_preloadSlotId, slotPaths, slotTypes);
+
+    for (auto& slot : m_slots) {
+        if (slot.type == InputType::ColorBars) continue;
+
+        auto activeSrc = m_playbackManager.getSource(slot.id);
+        if (activeSrc) {
+            slot.source = activeSrc;
+            slot.state = SourceState::Playing;
         } else {
-            if (slot.type != InputType::ColorBars && slot.source) {
-                slot.source->close();
-                slot.source.reset();
-                slot.state = SourceState::Idle;
-                LOG_INFO("InputManager: Evicted idle PlaybackInstance for slot #{} '{}' (0 decoders/threads)", slot.id, slot.name);
-            }
+            slot.source = nullptr;
+            slot.state = SourceState::Idle;
         }
     }
 }
@@ -121,7 +121,7 @@ int InputManager::addFileSlot(const std::string& filePath, const std::string& na
     }
     slot.filePath = filePath;
     slot.state = SourceState::Idle;
-    slot.source = nullptr; // ZERO persistent decoders/threads in Idle state
+    slot.source = nullptr;
 
     SourceInfo info;
     info.id = slot.id;
@@ -131,7 +131,6 @@ int InputManager::addFileSlot(const std::string& filePath, const std::string& na
     info.state = SourceState::Idle;
     m_registry.addSource(info);
 
-    // Request 320x180 thumbnail extraction asynchronously
     ThumbnailGenerator::instance().requestThumbnail(slot.id, filePath, slot.type);
 
     m_slots.push_back(slot);
@@ -143,7 +142,7 @@ int InputManager::addFileSlot(const std::string& filePath, const std::string& na
 
     updateActivePlaybackInstances();
 
-    LOG_INFO("InputManager: Registered slot #{} '{}' (IDLE state, 0 decoders)", newId, slot.name);
+    LOG_INFO("InputManager: Registered slot #{} '{}' (IDLE state)", newId, slot.name);
 
     if (m_onInputListChanged) m_onInputListChanged();
     if (m_onPreviewChanged) m_onPreviewChanged();
@@ -157,10 +156,6 @@ bool InputManager::removeSlot(int slotId) {
     });
 
     if (it != m_slots.end()) {
-        if (it->source) {
-            it->source->close();
-            it->source.reset();
-        }
         m_registry.removeSource(slotId);
         m_slots.erase(it);
 
@@ -169,6 +164,9 @@ bool InputManager::removeSlot(int slotId) {
         }
         if (m_programSlotId == slotId) {
             m_programSlotId = m_slots.empty() ? -1 : m_slots.front().id;
+        }
+        if (m_preloadSlotId == slotId) {
+            m_preloadSlotId = -1;
         }
 
         updateActivePlaybackInstances();
@@ -206,6 +204,22 @@ void InputManager::setProgramSlot(int slotId) {
     }
     LOG_INFO("InputManager: Program switched to slot #{}", slotId);
     if (m_onProgramChanged) m_onProgramChanged();
+}
+
+void InputManager::preloadSlot(int slotId) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (slotId <= 0 || slotId == m_previewSlotId || slotId == m_programSlotId) return;
+
+    auto* slot = getSlot(slotId);
+    if (slot && slot->type != InputType::ColorBars && !slot->filePath.empty()) {
+        m_preloadSlotId = slotId;
+        m_playbackManager.preloadSlot(slotId, slot->filePath, slot->type);
+        auto activeSrc = m_playbackManager.getSource(slotId);
+        if (activeSrc) {
+            slot->source = activeSrc;
+            slot->state = SourceState::Preloading;
+        }
+    }
 }
 
 void InputManager::swapPreviewAndProgram() {

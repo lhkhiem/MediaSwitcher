@@ -1167,6 +1167,9 @@ void MainWindow::rebuildInputDock() {
         connect(slotWidget, &InputSlotWidget::clicked, this, [this](int slotId) {
             m_inputManager.setPreviewSlot(slotId);
         });
+        connect(slotWidget, &InputSlotWidget::hovered, this, [this](int slotId) {
+            m_inputManager.preloadSlot(slotId);
+        });
         connect(slotWidget, &InputSlotWidget::removeRequested, this, [this](int slotId) {
             m_inputManager.removeSlot(slotId);
         });

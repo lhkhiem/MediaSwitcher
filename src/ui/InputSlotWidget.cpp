@@ -176,6 +176,11 @@ void InputSlotWidget::mousePressEvent(QMouseEvent *event) {
     QWidget::mousePressEvent(event);
 }
 
+void InputSlotWidget::enterEvent(QEnterEvent *event) {
+    emit hovered(m_slotId);
+    QWidget::enterEvent(event);
+}
+
 void InputSlotWidget::paintEvent(QPaintEvent *event) {
     Q_UNUSED(event);
     QPainter painter(this);

@@ -4,6 +4,7 @@
 #include <QImage>
 #include <QPaintEvent>
 #include <QMouseEvent>
+#include <QEnterEvent>
 #include <QTimer>
 #include <QSlider>
 #include <QPushButton>
@@ -23,11 +24,13 @@ public:
 
 signals:
     void clicked(int slotId);
+    void hovered(int slotId);
     void removeRequested(int slotId);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void enterEvent(QEnterEvent *event) override;
 
 private:
     int m_slotId{-1};

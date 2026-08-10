@@ -47,6 +47,9 @@ set(SOURCES
     engine/input/SourceRegistry.cpp
     engine/input/ThumbnailGenerator.h
     engine/input/ThumbnailGenerator.cpp
+    engine/input/ResourceManager.h
+    engine/input/PlaybackManager.h
+    engine/input/PlaybackManager.cpp
     engine/input/InputSlot.h
     engine/input/InputManager.cpp
     engine/input/InputManager.h

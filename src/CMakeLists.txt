@@ -117,7 +117,3 @@ add_custom_command(TARGET MediaSwitcher POST_BUILD
 if(MSVC)
     target_compile_options(MediaSwitcher PRIVATE /W4)
 endif()
-
-# Test target for playlist loop state machine verification
-add_executable(test_playlist test_playlist.cpp common/logger/Logger.cpp)
-target_link_libraries(test_playlist PRIVATE Qt6::Core spdlog::spdlog fmt::fmt)

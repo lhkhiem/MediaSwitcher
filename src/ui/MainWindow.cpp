@@ -1358,6 +1358,12 @@ void MainWindow::onPlaylistPrevClicked() {
     if (!m_playlistController.isActive()) return;
     if (m_playlistController.previous()) {
         activatePlaylistCurrentStep();
+        if (m_playlistPauseBtn) m_playlistPauseBtn->setText("⏸");
+        auto pgmSrc = m_inputManager.programSource();
+        LOG_INFO("[PLAYLIST STATE] action=PREVIOUS index={} paused={} isPlaying={}",
+                 m_playlistController.currentIndex(),
+                 m_playlistController.isPaused() ? "true" : "false",
+                 (pgmSrc && pgmSrc->isPlaying()) ? "true" : "false");
         statusBar()->showMessage("Playlist: Jumped to Previous Track.");
     }
 }
@@ -1366,6 +1372,12 @@ void MainWindow::onPlaylistNextClicked() {
     if (!m_playlistController.isActive()) return;
     if (m_playlistController.advance(true)) {
         activatePlaylistCurrentStep();
+        if (m_playlistPauseBtn) m_playlistPauseBtn->setText("⏸");
+        auto pgmSrc = m_inputManager.programSource();
+        LOG_INFO("[PLAYLIST STATE] action=NEXT index={} paused={} isPlaying={}",
+                 m_playlistController.currentIndex(),
+                 m_playlistController.isPaused() ? "true" : "false",
+                 (pgmSrc && pgmSrc->isPlaying()) ? "true" : "false");
         statusBar()->showMessage("Playlist: Jumped to Next Track.");
     }
 }

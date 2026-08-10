@@ -97,6 +97,7 @@ public:
         }
 
         m_currentIndex = nextIdx;
+        m_paused = false;
         m_state = PlaylistState::Transitioning;
         m_stepStartTime = std::chrono::steady_clock::now();
 
@@ -121,6 +122,7 @@ public:
             m_currentIndex--;
         }
 
+        m_paused = false;
         m_state = PlaylistState::Transitioning;
         m_stepStartTime = std::chrono::steady_clock::now();
 
@@ -134,7 +136,8 @@ public:
     // Call when new item playback has been initiated on Program
     void completeTransition() {
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_active && !m_paused) {
+        if (m_active) {
+            m_paused = false;
             m_state = PlaylistState::Playing;
             m_stepStartTime = std::chrono::steady_clock::now();
             LOG_INFO("[PLAYLIST PROGRAM] Transition completed. Playing step #{} (slot #{})",

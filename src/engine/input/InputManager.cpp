@@ -49,10 +49,13 @@ void InputManager::updateActivePlaybackInstances() {
     for (auto& slot : m_slots) {
         if (slot.type == InputType::ColorBars) continue;
 
-        auto activeSrc = m_playbackManager.getSource(slot.id);
-        if (activeSrc) {
-            slot.source = activeSrc;
-            slot.state = SourceState::Playing;
+        auto pgmSrc = m_playbackManager.getSourceForSlot(slot.id, PlaybackRole::Program);
+        auto pvwSrc = m_playbackManager.getSourceForSlot(slot.id, PlaybackRole::Preview);
+        auto preloadSrc = m_playbackManager.getSourceForSlot(slot.id, PlaybackRole::Preload);
+
+        if (pgmSrc || pvwSrc || preloadSrc) {
+            slot.source = pgmSrc ? pgmSrc : (pvwSrc ? pvwSrc : preloadSrc);
+            slot.state = (slot.id == m_programSlotId) ? SourceState::Playing : SourceState::Ready;
         } else {
             slot.source = nullptr;
             slot.state = SourceState::Idle;
@@ -214,9 +217,8 @@ void InputManager::preloadSlot(int slotId) {
     if (slot && slot->type != InputType::ColorBars && !slot->filePath.empty()) {
         m_preloadSlotId = slotId;
         m_playbackManager.preloadSlot(slotId, slot->filePath, slot->type);
-        auto activeSrc = m_playbackManager.getSource(slotId);
+        auto activeSrc = m_playbackManager.getSource(PlaybackRole::Preload);
         if (activeSrc) {
-            slot->source = activeSrc;
             slot->state = SourceState::Preloading;
         }
     }
@@ -236,11 +238,15 @@ void InputManager::swapPreviewAndProgram() {
 std::shared_ptr<IMediaSource> InputManager::previewSource() {
     std::lock_guard<std::mutex> lock(m_mutex);
     auto* slot = getSlot(m_previewSlotId);
-    return slot ? slot->source : nullptr;
+    if (!slot) return nullptr;
+    if (slot->type == InputType::ColorBars) return slot->source;
+    return m_playbackManager.getSource(PlaybackRole::Preview);
 }
 
 std::shared_ptr<IMediaSource> InputManager::programSource() {
     std::lock_guard<std::mutex> lock(m_mutex);
     auto* slot = getSlot(m_programSlotId);
-    return slot ? slot->source : nullptr;
+    if (!slot) return nullptr;
+    if (slot->type == InputType::ColorBars) return slot->source;
+    return m_playbackManager.getSource(PlaybackRole::Program);
 }

@@ -2,6 +2,40 @@
 #include "common/logger/Logger.h"
 #include <vector>
 
+void PlaybackManager::activateSource(PlaybackRole role, int slotId, const std::string& filePath, SourceType type) {
+    if (slotId <= 0 || type == SourceType::ColorBars || filePath.empty()) return;
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto slotIt = m_roleSlotIds.find(role);
+    if (slotIt != m_roleSlotIds.end() && slotIt->second == slotId) {
+        // Instance already active for this role and slot
+        return;
+    }
+
+    // Close old instance for this role if existing
+    auto oldIt = m_roleInstances.find(role);
+    if (oldIt != m_roleInstances.end() && oldIt->second) {
+        oldIt->second->close();
+    }
+
+    auto fileSrc = std::make_shared<FileSource>(filePath);
+    fileSrc->open();
+
+    if (role == PlaybackRole::Program) {
+        fileSrc->play();
+    } else {
+        fileSrc->pause();
+    }
+    fileSrc->setAudioActive(role == PlaybackRole::Program);
+
+    m_roleInstances[role] = fileSrc;
+    m_roleSlotIds[role] = slotId;
+
+    const char* roleName = (role == PlaybackRole::Program) ? "Program" : ((role == PlaybackRole::Preview) ? "Preview" : "Preload");
+    LOG_INFO("PlaybackManager: Explicitly activated role instance for role={} slotId=#{}", roleName, slotId);
+}
+
 void PlaybackManager::updateState(int pgmSlotId, int pvwSlotId, int preloadSlotId,
                                    const std::unordered_map<int, std::string>& slotPaths,
                                    const std::unordered_map<int, SourceType>& slotTypes) {
@@ -11,56 +45,70 @@ void PlaybackManager::updateState(int pgmSlotId, int pvwSlotId, int preloadSlotI
     m_pvwSlotId = pvwSlotId;
     m_preloadSlotId = preloadSlotId;
 
-    std::vector<int> currentActiveIds;
-    for (const auto& [id, src] : m_activeSources) {
-        currentActiveIds.push_back(id);
-    }
+    auto handleRoleSlot = [&](PlaybackRole role, int slotId) {
+        const char* roleName = (role == PlaybackRole::Program) ? "Program" : ((role == PlaybackRole::Preview) ? "Preview" : "Preload");
 
-    // Determine slots that must be evicted to stay within budget
-    std::vector<int> toEvict = m_resourceManager.enforceBudget(pgmSlotId, pvwSlotId, preloadSlotId, currentActiveIds);
-
-    for (int evictId : toEvict) {
-        auto it = m_activeSources.find(evictId);
-        if (it != m_activeSources.end()) {
-            if (it->second) {
-                it->second->close();
+        if (slotId <= 0) {
+            auto it = m_roleInstances.find(role);
+            if (it != m_roleInstances.end()) {
+                if (it->second) it->second->close();
+                m_roleInstances.erase(it);
+                m_roleSlotIds.erase(role);
             }
-            m_activeSources.erase(it);
-            LOG_INFO("PlaybackManager: Evicted PlaybackInstance for slot #{} (Max 3 budget enforced)", evictId);
+            return;
         }
-    }
-
-    // Ensure desired active slots (PGM, PVW, Preload) have instances
-    std::vector<int> desired = { pgmSlotId, pvwSlotId, preloadSlotId };
-    for (int slotId : desired) {
-        if (slotId <= 0) continue;
 
         auto typeIt = slotTypes.find(slotId);
         if (typeIt != slotTypes.end() && typeIt->second == SourceType::ColorBars) {
-            continue; // ColorBars does not use PlaybackManager FileSource
+            auto it = m_roleInstances.find(role);
+            if (it != m_roleInstances.end()) {
+                if (it->second) it->second->close();
+                m_roleInstances.erase(it);
+                m_roleSlotIds.erase(role);
+            }
+            return;
         }
 
-        if (m_activeSources.find(slotId) == m_activeSources.end()) {
+        auto slotIt = m_roleSlotIds.find(role);
+        if (slotIt == m_roleSlotIds.end() || slotIt->second != slotId) {
             auto pathIt = slotPaths.find(slotId);
             if (pathIt != slotPaths.end() && !pathIt->second.empty()) {
+                auto oldIt = m_roleInstances.find(role);
+                if (oldIt != m_roleInstances.end() && oldIt->second) {
+                    oldIt->second->close();
+                }
+
                 auto fileSrc = std::make_shared<FileSource>(pathIt->second);
                 fileSrc->open();
 
-                // If paused/preloading, decode 1 frame so it's ready instantly
-                if (slotId != pgmSlotId && slotId != pvwSlotId) {
+                if (role == PlaybackRole::Program) {
+                    fileSrc->play();
+                } else {
                     fileSrc->pause();
                 }
 
-                m_activeSources[slotId] = fileSrc;
-                LOG_INFO("PlaybackManager: Created active PlaybackInstance for slot #{}", slotId);
+                fileSrc->setAudioActive(role == PlaybackRole::Program);
+
+                m_roleInstances[role] = fileSrc;
+                m_roleSlotIds[role] = slotId;
+                LOG_INFO("PlaybackManager: Allocated role instance for role={} slotId=#{}", roleName, slotId);
+            }
+        } else {
+            auto srcIt = m_roleInstances.find(role);
+            if (srcIt != m_roleInstances.end() && srcIt->second) {
+                srcIt->second->setAudioActive(role == PlaybackRole::Program);
             }
         }
+    };
 
-        // Configure audio active state (Only PGM submits audio)
-        auto srcIt = m_activeSources.find(slotId);
-        if (srcIt != m_activeSources.end() && srcIt->second) {
-            srcIt->second->setAudioActive(slotId == pgmSlotId);
-        }
+    // Allocate in priority order: Program -> Preview -> Preload
+    handleRoleSlot(PlaybackRole::Program, pgmSlotId);
+    handleRoleSlot(PlaybackRole::Preview, pvwSlotId);
+
+    if (m_roleInstances.size() < ResourceManager::MAX_TOTAL_ACTIVE_PLAYBACKS) {
+        handleRoleSlot(PlaybackRole::Preload, preloadSlotId);
+    } else {
+        handleRoleSlot(PlaybackRole::Preload, -1);
     }
 }
 
@@ -69,48 +117,52 @@ void PlaybackManager::preloadSlot(int slotId, const std::string& filePath, Sourc
 
     std::lock_guard<std::mutex> lock(m_mutex);
 
-    // If already active or preloaded, do nothing
-    if (m_activeSources.find(slotId) != m_activeSources.end()) return;
-
-    // Check if we can add a preload within budget
-    if (m_activeSources.size() >= ResourceManager::MAX_TOTAL_ACTIVE_PLAYBACKS) {
-        // Evict current preload if available
-        if (m_preloadSlotId > 0 && m_preloadSlotId != m_pgmSlotId && m_preloadSlotId != m_pvwSlotId) {
-            auto it = m_activeSources.find(m_preloadSlotId);
-            if (it != m_activeSources.end()) {
-                if (it->second) it->second->close();
-                m_activeSources.erase(it);
-                LOG_INFO("PlaybackManager: Evicted old Preload slot #{} to make room for new Preload #{}", m_preloadSlotId, slotId);
-            }
-        }
+    // If already assigned to a role, return
+    for (const auto& [role, id] : m_roleSlotIds) {
+        if (id == slotId) return;
     }
 
-    if (m_activeSources.size() < ResourceManager::MAX_TOTAL_ACTIVE_PLAYBACKS) {
+    if (m_roleInstances.size() < ResourceManager::MAX_TOTAL_ACTIVE_PLAYBACKS) {
         m_preloadSlotId = slotId;
         auto fileSrc = std::make_shared<FileSource>(filePath);
         fileSrc->open();
         fileSrc->pause();
-        m_activeSources[slotId] = fileSrc;
-        LOG_INFO("PlaybackManager: Preloaded slot #{} (1st frame ready in background)", slotId);
+        fileSrc->setAudioActive(false);
+
+        m_roleInstances[PlaybackRole::Preload] = fileSrc;
+        m_roleSlotIds[PlaybackRole::Preload] = slotId;
+        LOG_INFO("PlaybackManager: Preloaded slot #{} for role=Preload", slotId);
     }
 }
 
-std::shared_ptr<IMediaSource> PlaybackManager::getSource(int slotId) {
+// Read-only lookup. DOES NOT create decoders/instances implicitly.
+std::shared_ptr<IMediaSource> PlaybackManager::getSource(PlaybackRole role) const {
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_activeSources.find(slotId);
-    return (it != m_activeSources.end()) ? it->second : nullptr;
+    auto it = m_roleInstances.find(role);
+    return (it != m_roleInstances.end()) ? it->second : nullptr;
+}
+
+std::shared_ptr<IMediaSource> PlaybackManager::getSourceForSlot(int slotId, PlaybackRole role) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto slotIt = m_roleSlotIds.find(role);
+    if (slotIt != m_roleSlotIds.end() && slotIt->second == slotId) {
+        auto srcIt = m_roleInstances.find(role);
+        return (srcIt != m_roleInstances.end()) ? srcIt->second : nullptr;
+    }
+    return nullptr;
 }
 
 void PlaybackManager::clear() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    for (auto& [id, src] : m_activeSources) {
+    for (auto& [role, src] : m_roleInstances) {
         if (src) src->close();
     }
-    m_activeSources.clear();
+    m_roleInstances.clear();
+    m_roleSlotIds.clear();
     m_pgmSlotId = m_pvwSlotId = m_preloadSlotId = -1;
 }
 
 size_t PlaybackManager::activeDecoderCount() const {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_activeSources.size();
+    return m_roleInstances.size();
 }

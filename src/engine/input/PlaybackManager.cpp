@@ -1,6 +1,9 @@
 #include "PlaybackManager.h"
+#include "engine/audio/AudioEngine.h"
+#include "engine/diagnostics/MediaDiagnostics.h"
 #include "common/logger/Logger.h"
 #include <vector>
+#include <string>
 
 void PlaybackManager::activateSource(PlaybackRole role, int slotId, const std::string& filePath, SourceType type) {
     if (slotId <= 0 || type == SourceType::ColorBars || filePath.empty()) return;
@@ -28,6 +31,7 @@ void PlaybackManager::activateSource(PlaybackRole role, int slotId, const std::s
         fileSrc->pause();
     }
     fileSrc->setAudioActive(role == PlaybackRole::Program);
+    fileSrc->setDecodeMode(role == PlaybackRole::Preload ? DecodeMode::Idle : DecodeMode::Active);
 
     m_roleInstances[role] = fileSrc;
     m_roleSlotIds[role] = slotId;
@@ -65,10 +69,12 @@ void PlaybackManager::swapRoles() {
     // Audio & Playback state normalization: Program MUST be PLAYING, Preview MUST be PAUSED
     if (m_roleInstances[PlaybackRole::Program]) {
         m_roleInstances[PlaybackRole::Program]->setAudioActive(true);
+        m_roleInstances[PlaybackRole::Program]->setDecodeMode(DecodeMode::Active);
         m_roleInstances[PlaybackRole::Program]->play();
     }
     if (m_roleInstances[PlaybackRole::Preview]) {
         m_roleInstances[PlaybackRole::Preview]->setAudioActive(false);
+        m_roleInstances[PlaybackRole::Preview]->setDecodeMode(DecodeMode::Active);
         m_roleInstances[PlaybackRole::Preview]->pause();
     }
 
@@ -87,6 +93,10 @@ void PlaybackManager::swapRoles() {
     LOG_INFO("[SWAP AFTER] PGM #{} (ptr={}) pos={:.2f}s playing={} | PVW #{} (ptr={}) pos={:.2f}s playing={}",
              m_pgmSlotId, newPgmPtr, newPgmPos, newPgmPlaying ? "true" : "false",
              m_pvwSlotId, newPvwPtr, newPvwPos, newPvwPlaying ? "true" : "false");
+
+    std::string pvwDetails = "Slot #" + std::to_string(m_pvwSlotId) + " pos=" + std::to_string(newPvwPos) + "s playing=" + (newPvwPlaying ? "1" : "0");
+    std::string pgmDetails = "Slot #" + std::to_string(m_pgmSlotId) + " pos=" + std::to_string(newPgmPos) + "s playing=" + (newPgmPlaying ? "1" : "0");
+    MediaDiagnostics::instance().logSwapSnapshot(pvwDetails, pgmDetails, 4);
 }
 
 void PlaybackManager::updateState(int pgmSlotId, int pvwSlotId, int preloadSlotId,
@@ -111,10 +121,12 @@ void PlaybackManager::updateState(int pgmSlotId, int pvwSlotId, int preloadSlotI
 
         if (m_roleInstances[PlaybackRole::Program]) {
             m_roleInstances[PlaybackRole::Program]->setAudioActive(true);
+            m_roleInstances[PlaybackRole::Program]->setDecodeMode(DecodeMode::Active);
             m_roleInstances[PlaybackRole::Program]->play();
         }
         if (m_roleInstances[PlaybackRole::Preview]) {
             m_roleInstances[PlaybackRole::Preview]->setAudioActive(false);
+            m_roleInstances[PlaybackRole::Preview]->setDecodeMode(DecodeMode::Active);
             m_roleInstances[PlaybackRole::Preview]->pause();
         }
         return;
@@ -167,6 +179,7 @@ void PlaybackManager::updateState(int pgmSlotId, int pvwSlotId, int preloadSlotI
                 }
 
                 fileSrc->setAudioActive(role == PlaybackRole::Program);
+                fileSrc->setDecodeMode(role == PlaybackRole::Preload ? DecodeMode::Idle : DecodeMode::Active);
 
                 m_roleInstances[role] = fileSrc;
                 m_roleSlotIds[role] = slotId;
@@ -176,6 +189,7 @@ void PlaybackManager::updateState(int pgmSlotId, int pvwSlotId, int preloadSlotI
             auto srcIt = m_roleInstances.find(role);
             if (srcIt != m_roleInstances.end() && srcIt->second) {
                 srcIt->second->setAudioActive(role == PlaybackRole::Program);
+                srcIt->second->setDecodeMode(role == PlaybackRole::Preload ? DecodeMode::Idle : DecodeMode::Active);
             }
         }
     };
@@ -207,6 +221,7 @@ void PlaybackManager::preloadSlot(int slotId, const std::string& filePath, Sourc
         fileSrc->open();
         fileSrc->pause();
         fileSrc->setAudioActive(false);
+        fileSrc->setDecodeMode(DecodeMode::Idle);
 
         m_roleInstances[PlaybackRole::Preload] = fileSrc;
         m_roleSlotIds[PlaybackRole::Preload] = slotId;

@@ -3,6 +3,7 @@
 #include <xaudio2.h>
 #include <wrl/client.h>
 #include <vector>
+#include <deque>
 #include <mutex>
 #include <atomic>
 #include <thread>
@@ -58,6 +59,8 @@ private:
 
     std::atomic<bool> m_initialized{false};
     std::atomic<bool> m_running{false};
+    std::atomic<bool> m_voiceStarted{false};
+    std::atomic<bool> m_waitingForPreroll{true};
     std::atomic<float> m_volume{1.0f};
     std::atomic<bool> m_muted{false};
     std::atomic<float> m_ftbAlpha{1.0f};
@@ -69,11 +72,19 @@ private:
     std::atomic<uint64_t> m_samplesAtBasePts{0};
 
     std::mutex m_bufferMutex;
-    std::vector<float> m_ringBuffer;
+    std::deque<float> m_ringBuffer;
 
     // Multi-buffering for XAudio2 submits
-    static constexpr size_t NUM_BUFFERS = 8;
-    static constexpr size_t BUFFER_SIZE_BYTES = 480 * 2 * sizeof(float); // 10ms @ 48kHz stereo = 960 floats (3840 bytes)
+    static constexpr size_t NUM_BUFFERS = 64;
+    // XAudio2 accepts at most 64 queued buffers. 60 x 40ms provides 2.4s of
+    // physical output protection against demux/decode stalls without growing
+    // video packet queues or introducing silence.
+    static constexpr uint32_t OUTPUT_QUEUE_BUFFERS = 60;
+    static constexpr size_t BUFFER_FRAMES = 1920; // 40ms @ 48kHz
+    static constexpr size_t BUFFER_FLOATS = BUFFER_FRAMES * 2;
+    static constexpr size_t BUFFER_SIZE_BYTES = BUFFER_FLOATS * sizeof(float);
+    static constexpr size_t PREROLL_FRAMES = 24000; // 500ms startup and route-change buffer
+    static constexpr size_t PREROLL_FLOATS = PREROLL_FRAMES * 2;
     std::vector<uint8_t> m_audioBuffers[NUM_BUFFERS];
     size_t m_currentBufferIndex{0};
 

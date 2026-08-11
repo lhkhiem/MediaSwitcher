@@ -1,4 +1,5 @@
 #include "FFmpegDecoder.h"
+#include "engine/diagnostics/MediaDiagnostics.h"
 #include "common/logger/Logger.h"
 #include <algorithm>
 
@@ -25,6 +26,7 @@ void FFmpegDecoder::clearPacketQueues() {
     std::lock_guard<std::mutex> lock(m_queueMutex);
     for (auto pkt : m_videoPacketQueue) { if (pkt) av_packet_free(&pkt); }
     m_videoPacketQueue.clear();
+    m_videoPacketBytes = 0;
     for (auto pkt : m_audioPacketQueue) { if (pkt) av_packet_free(&pkt); }
     m_audioPacketQueue.clear();
 }
@@ -33,23 +35,47 @@ void FFmpegDecoder::readPackets(size_t maxCount) {
     if (!m_isOpen || !m_formatContext || m_atFormatEof) return;
 
     size_t readCount = 0;
+    int vPktsRead = 0;
+    int aPktsRead = 0;
+
     while (m_isOpen && readCount < maxCount) {
-        // Stop reading when either video OR audio queue is full.
-        // This prevents unbounded memory growth with high-bitrate sources.
+        // Keep queues bounded, but do not let a full video queue starve audio.
+        // Many containers interleave several video packets before the next audio packet;
+        // stopping on the soft video limit alone causes repeated XAudio underruns.
+        bool videoSoftFull = false;
+        bool audioFull = false;
+        bool videoHardFull = false;
+        bool audioNeedsFill = false;
         {
             std::lock_guard<std::mutex> lock(m_queueMutex);
-            bool videoFull = (m_videoStreamIndex >= 0 && m_videoPacketQueue.size() >= m_maxVideoQueueSize);
-            bool audioFull = (m_audioStreamIndex >= 0 && m_audioPacketQueue.size() >= m_maxAudioQueueSize);
-            if (videoFull || audioFull) break;
+            // Preserve normal low-latency count throttling, but when audio is low
+            // permit demux to cross dense H.264 video runs up to a fixed 128MB cap.
+            const size_t videoHardLimit = MAX_VIDEO_PACKET_BYTES;
+            const size_t audioLowWatermark = (std::min)(m_maxAudioQueueSize, size_t{128});
+
+            videoSoftFull = (m_videoStreamIndex >= 0 && m_videoPacketQueue.size() >= m_maxVideoQueueSize);
+            videoHardFull = (m_videoStreamIndex >= 0 && m_videoPacketBytes >= videoHardLimit);
+            audioFull = (m_audioStreamIndex >= 0 && m_audioPacketQueue.size() >= m_maxAudioQueueSize);
+            audioNeedsFill = (m_audioStreamIndex >= 0 && m_audioPacketQueue.size() < audioLowWatermark);
+
+            if (audioFull || videoHardFull || (videoSoftFull && !audioNeedsFill)) {
+                MediaDiagnostics::instance().recordDemuxRead(videoSoftFull, audioFull, vPktsRead, aPktsRead);
+                break;
+            }
         }
 
         int ret = av_read_frame(m_formatContext, m_avPacket);
         if (ret >= 0) {
             std::lock_guard<std::mutex> lock(m_queueMutex);
             if (m_avPacket->stream_index == m_videoStreamIndex) {
-                m_videoPacketQueue.push_back(av_packet_clone(m_avPacket));
+                if (AVPacket* packet = av_packet_clone(m_avPacket)) {
+                    m_videoPacketBytes += static_cast<size_t>((std::max)(packet->size, 0));
+                    m_videoPacketQueue.push_back(packet);
+                    ++vPktsRead;
+                }
             } else if (m_avPacket->stream_index == m_audioStreamIndex) {
                 m_audioPacketQueue.push_back(av_packet_clone(m_avPacket));
+                ++aPktsRead;
             }
             av_packet_unref(m_avPacket);
             ++readCount;
@@ -57,6 +83,10 @@ void FFmpegDecoder::readPackets(size_t maxCount) {
             m_atFormatEof = true;   // Format context reached true EOF
             break;
         }
+    }
+
+    if (readCount > 0) {
+        MediaDiagnostics::instance().recordDemuxRead(false, false, vPktsRead, aPktsRead);
     }
 }
 
@@ -243,6 +273,7 @@ bool FFmpegDecoder::decodeNextFrame(Frame& outFrame) {
             if (!m_videoPacketQueue.empty()) {
                 pkt = m_videoPacketQueue.front();
                 m_videoPacketQueue.pop_front();
+                m_videoPacketBytes -= (std::min)(m_videoPacketBytes, static_cast<size_t>((std::max)(pkt->size, 0)));
             }
         }
         if (pkt) {
@@ -294,7 +325,7 @@ bool FFmpegDecoder::decodeNextFrame(Frame& outFrame) {
 bool FFmpegDecoder::decodeAudioSamples(std::vector<float>& outPcmBuffer) {
     if (!m_isOpen || !m_audioCodecContext || !m_swrContext || m_audioStreamIndex < 0) return false;
 
-    readPackets(30);
+    readPackets(120);
 
     bool decodedAny = false;
 

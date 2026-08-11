@@ -1,5 +1,6 @@
 #include "FileSource.h"
 #include "engine/audio/AudioEngine.h"
+#include "engine/diagnostics/MediaDiagnostics.h"
 #include "common/logger/Logger.h"
 #include <algorithm>
 #include <chrono>
@@ -90,6 +91,18 @@ void FileSource::setAudioActive(bool active) {
     LOG_DEBUG("FileSource '{}': audioActive = {}", m_filePath, active);
 }
 
+void FileSource::setDecodeMode(DecodeMode mode) {
+    DecodeMode previous = m_decodeMode.exchange(mode);
+    if (previous == mode) return;
+
+    if (mode == DecodeMode::Active) {
+        m_clockInitialized = false;
+    }
+
+    LOG_DEBUG("FileSource '{}': decodeMode = {}", m_filePath,
+              mode == DecodeMode::Active ? "Active" : "Idle");
+}
+
 void FileSource::seekToSeconds(double seconds) {
     if (seconds < 0.0) seconds = 0.0;
     m_seekTarget.store(seconds);
@@ -129,20 +142,23 @@ std::shared_ptr<Frame> FileSource::getFrame() {
 // ---------------------------------------------------------------------------
 
 void FileSource::drainAndSubmitAudio() {
-    if (!m_decoder.hasAudio()) return;
+    if (!m_decoder.hasAudio() || !m_audioActive.load()) return;
 
-    // Throttle: don't over-buffer (> 2 seconds of audio)
-    if (AudioEngine::instance().getRingBufferSize() > static_cast<size_t>(48000) * 2 * 2) return;
+    // Keep up to three seconds of decoded PCM ahead of XAudio2. A single decoder call
+    // produces at most 250ms, which is insufficient for heavier 1080p sources.
+    constexpr size_t TARGET_AUDIO_FLOATS = 48000 * 2 * 3;
+    constexpr size_t MAX_AUDIO_DECODE_BATCHES = 4;
 
-    std::vector<float> pcm;
-    m_decoder.decodeAudioSamples(pcm);
+    for (size_t batch = 0; batch < MAX_AUDIO_DECODE_BATCHES && m_audioActive.load() &&
+         AudioEngine::instance().getRingBufferSize() < TARGET_AUDIO_FLOATS; ++batch) {
+        std::vector<float> pcm;
+        if (!m_decoder.decodeAudioSamples(pcm) || pcm.empty()) {
+            break;
+        }
 
-    // Only submit to AudioEngine when this source is the active PGM audio source
-    if (!pcm.empty() && m_audioActive.load()) {
-        // Apply per-slot volume/mute gain before submitting
         float vol = m_muted.load() ? 0.0f : m_volume.load();
         if (std::abs(vol - 1.0f) > 0.001f) {
-            for (auto& s : pcm) s *= vol;
+            for (auto& sample : pcm) sample *= vol;
         }
         AudioEngine::instance().submitAudioSamples(pcm.data(), pcm.size() / 2);
     }
@@ -158,7 +174,11 @@ void FileSource::decodeWorkerLoop() {
     int frameDelayMs = static_cast<int>(1000.0 / fps);
     if (frameDelayMs < 5) frameDelayMs = 5;
 
+    auto lastAudioDrainTime = std::chrono::steady_clock::now();
+    bool hasLastAudioDrain = false;
+
     while (m_running) {
+        DecodeMode decodeMode = m_decodeMode.load();
 
         // --- Handle user-initiated seek ---
         double seekSec = m_seekTarget.exchange(-1.0);
@@ -168,6 +188,7 @@ void FileSource::decodeWorkerLoop() {
             // Clear AudioEngine buffer so stale audio doesn't play after seek
             if (m_audioActive.load()) {
                 AudioEngine::instance().clearAudioBuffer();
+                AudioEngine::instance().resetAudioPts(seekSec);
             }
             // Decode one still frame so the UI shows the seek position immediately
             auto frame = m_framePool.acquire(m_decoder.width(), m_decoder.height(), PixelFormat::RGBA32);
@@ -200,18 +221,43 @@ void FileSource::decodeWorkerLoop() {
 
         // --- Drain audio packets (always call to prevent queue overflow) ---
         // Submits to AudioEngine only when m_audioActive == true
+        auto drainStart = std::chrono::steady_clock::now();
+        if (hasLastAudioDrain) {
+            double gapMs = std::chrono::duration<double, std::milli>(drainStart - lastAudioDrainTime).count();
+            MediaDiagnostics::instance().recordTimeSinceLastAudioDrain(gapMs);
+        }
+        lastAudioDrainTime = drainStart;
+        hasLastAudioDrain = true;
+
         drainAndSubmitAudio();
+
+        auto drainEnd = std::chrono::steady_clock::now();
+        double drainDur = std::chrono::duration<double, std::milli>(drainEnd - drainStart).count();
+        MediaDiagnostics::instance().recordAudioDrainDuration(drainDur);
 
         // --- Video decode path ---
         if (m_decoder.hasVideo()) {
             auto frame    = m_framePool.acquire(m_decoder.width(), m_decoder.height(), PixelFormat::RGBA32);
+
+            auto decodeStart = std::chrono::steady_clock::now();
             bool gotVideo = m_decoder.decodeNextFrame(*frame);
+            auto decodeEnd = std::chrono::steady_clock::now();
+
+            double decodeDur = std::chrono::duration<double, std::milli>(decodeEnd - decodeStart).count();
+            MediaDiagnostics::instance().recordVideoDecodeDuration(decodeDur);
 
             if (gotVideo) {
+                MediaDiagnostics::instance().recordVideoFrameDecoded();
                 {
                     std::lock_guard<std::mutex> lock(m_frameMutex);
                     m_currentFrame   = frame;
                     m_lastValidFrame = frame;
+                }
+
+                if (m_audioActive.load()) {
+                    double vPts = frame->pts();
+                    double aPts = AudioEngine::instance().getAudioPts();
+                    MediaDiagnostics::instance().recordAvPts(vPts, aPts);
                 }
 
                 // High-precision video frame pacing to wall clock
@@ -226,6 +272,7 @@ void FileSource::decodeWorkerLoop() {
                 double actualElapsed = std::chrono::duration<double>(now - m_playbackStartTime).count();
                 double diffSec       = targetElapsed - actualElapsed;
 
+                auto pacingStart = std::chrono::steady_clock::now();
                 if (diffSec > 0.0) {
                     int ms = (std::min)(static_cast<int>(diffSec * 1000.0), 100);
                     if (ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(ms));
@@ -234,6 +281,10 @@ void FileSource::decodeWorkerLoop() {
                 } else {
                     std::this_thread::sleep_for(std::chrono::milliseconds(frameDelayMs));
                 }
+                auto pacingEnd = std::chrono::steady_clock::now();
+                double pacingDur = std::chrono::duration<double, std::milli>(pacingEnd - pacingStart).count();
+                MediaDiagnostics::instance().recordVideoPacingDuration(pacingDur);
+                MediaDiagnostics::instance().recordVideoPacingSleep(pacingDur);
 
             } else {
                 // Video EOF
@@ -262,6 +313,11 @@ void FileSource::decodeWorkerLoop() {
                 }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+
+        if (decodeMode == DecodeMode::Idle && !m_audioActive.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            m_clockInitialized = false;
         }
     }
 }

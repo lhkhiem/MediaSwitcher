@@ -1,4 +1,5 @@
 #include "AudioEngine.h"
+#include "engine/diagnostics/MediaDiagnostics.h"
 #include "common/logger/Logger.h"
 #include <algorithm>
 #include <cmath>
@@ -51,10 +52,8 @@ bool AudioEngine::initialize() {
         return false;
     }
 
-    hr = m_sourceVoice->Start(0);
-    if (FAILED(hr)) {
-        LOG_ERROR("AudioEngine: Failed to start Source Voice.");
-    }
+    m_voiceStarted.store(false);
+    m_waitingForPreroll.store(true);
 
     for (size_t i = 0; i < NUM_BUFFERS; ++i) {
         m_audioBuffers[i].resize(BUFFER_SIZE_BYTES, 0);
@@ -64,12 +63,16 @@ bool AudioEngine::initialize() {
     m_initialized = true;
     m_feedThread = std::thread(&AudioEngine::bufferFeedLoop, this);
 
+    MediaDiagnostics::instance().start();
+
     LOG_INFO("AudioEngine: Successfully initialized XAudio2 (48kHz Stereo Float).");
     return true;
 }
 
 void AudioEngine::shutdown() {
     if (!m_initialized) return;
+
+    MediaDiagnostics::instance().stop();
 
     m_running = false;
     m_cv.notify_all();
@@ -101,17 +104,28 @@ void AudioEngine::submitAudioSamples(const float* samples, size_t numFrames) {
     if (!m_initialized || !samples || numFrames == 0) return;
 
     size_t numFloats = numFrames * 2; // Stereo L, R
+    {
+        std::lock_guard<std::mutex> lock(m_bufferMutex);
 
-    std::lock_guard<std::mutex> lock(m_bufferMutex);
-    
-    // Always insert submitted samples into ring buffer — NEVER drop audio samples!
-    // Sample dropping here was the root cause of missing words/lyrics in playback.
-    m_ringBuffer.insert(m_ringBuffer.end(), samples, samples + numFloats);
+        // Always insert submitted samples into ring buffer. The output thread
+        // applies preroll and underrun smoothing before handing data to XAudio2.
+        m_ringBuffer.insert(m_ringBuffer.end(), samples, samples + numFloats);
+    }
+
+    MediaDiagnostics::instance().recordAudioSubmit(numFrames);
     m_cv.notify_one();
 }
 
 void AudioEngine::clearAudioBuffer() {
     std::lock_guard<std::mutex> lock(m_bufferMutex);
+
+    if (m_sourceVoice) {
+        m_sourceVoice->Stop(0);
+        m_sourceVoice->FlushSourceBuffers();
+    }
+
+    m_voiceStarted.store(false);
+    m_waitingForPreroll.store(true);
     m_ringBuffer.clear();
     m_leftPeak.store(0.0f);
     m_rightPeak.store(0.0f);
@@ -170,25 +184,49 @@ void AudioEngine::bufferFeedLoop() {
             continue;
         }
 
+        if (m_waitingForPreroll.load()) {
+            bool shouldStartVoice = false;
+            size_t queuedSamples = 0;
+            {
+                std::lock_guard<std::mutex> lock(m_bufferMutex);
+                queuedSamples = m_ringBuffer.size();
+                shouldStartVoice = queuedSamples >= PREROLL_FLOATS;
+            }
+
+            MediaDiagnostics::instance().recordAudioQueueState(queuedSamples, 0);
+
+            if (!shouldStartVoice) {
+                std::unique_lock<std::mutex> lock(m_bufferMutex);
+                m_cv.wait_for(lock, std::chrono::milliseconds(5));
+                continue;
+            }
+
+            m_waitingForPreroll.store(false);
+        }
+
         XAUDIO2_VOICE_STATE state;
         m_sourceVoice->GetState(&state);
-
-        // Keep 4-5 buffers queued at all times to prevent XAudio2 hardware starvation
-        while (m_running && m_sourceVoice && state.BuffersQueued < 4) {
-            std::vector<float> chunk(960, 0.0f); // 480 frames stereo = 960 floats (10ms)
-            bool hasData = false;
+        // Queue physical output protection. Partial PCM is submitted at its exact length
+        // so decoder bursts never create silence between audio blocks.
+        while (m_running && m_sourceVoice && state.BuffersQueued < OUTPUT_QUEUE_BUFFERS) {
+            std::vector<float> chunk(BUFFER_FLOATS);
+            size_t copiedFloats = 0;
 
             {
                 std::lock_guard<std::mutex> lock(m_bufferMutex);
-                size_t avail = (std::min)(m_ringBuffer.size(), static_cast<size_t>(960));
-                if (avail > 0) {
-                    std::copy(m_ringBuffer.begin(), m_ringBuffer.begin() + avail, chunk.begin());
-                    m_ringBuffer.erase(m_ringBuffer.begin(), m_ringBuffer.begin() + avail);
-                    hasData = true;
+                copiedFloats = (std::min)(m_ringBuffer.size(), BUFFER_FLOATS);
+                if (copiedFloats == 0) {
+                    MediaDiagnostics::instance().recordAudioQueueState(m_ringBuffer.size(), state.BuffersQueued);
+                    break;
                 }
+
+                std::copy_n(m_ringBuffer.begin(), copiedFloats, chunk.begin());
+                m_ringBuffer.erase(m_ringBuffer.begin(), m_ringBuffer.begin() + copiedFloats);
+                MediaDiagnostics::instance().recordAudioConsumed(copiedFloats / 2);
+                MediaDiagnostics::instance().recordAudioQueueState(m_ringBuffer.size(), state.BuffersQueued);
             }
 
-            // Apply Master Volume, Mute, and FTB Alpha
+            // Apply Master Volume, Mute, and FTB Alpha.
             float masterVol = m_muted.load() ? 0.0f : m_volume.load();
             float ftbAlpha = m_ftbAlpha.load();
             float effGain = masterVol * ftbAlpha;
@@ -197,14 +235,13 @@ void AudioEngine::bufferFeedLoop() {
             float maxR = 0.0f;
 
             for (size_t i = 0; i < chunk.size(); i += 2) {
-                chunk[i] *= effGain;     // Left
-                chunk[i + 1] *= effGain; // Right
+                chunk[i] *= effGain;
+                chunk[i + 1] *= effGain;
 
                 maxL = (std::max)(maxL, std::abs(chunk[i]));
                 maxR = (std::max)(maxR, std::abs(chunk[i + 1]));
             }
 
-            // Smooth decay peak meter calculation
             float prevL = m_leftPeak.load();
             float prevR = m_rightPeak.load();
             m_leftPeak.store((std::max)(maxL, prevL * 0.88f));
@@ -214,13 +251,31 @@ void AudioEngine::bufferFeedLoop() {
             memcpy(buf.data(), chunk.data(), BUFFER_SIZE_BYTES);
 
             XAUDIO2_BUFFER xbuf = {};
-            xbuf.AudioBytes = static_cast<UINT32>(BUFFER_SIZE_BYTES);
+            xbuf.AudioBytes = static_cast<UINT32>(copiedFloats * sizeof(float));
             xbuf.pAudioData = buf.data();
             xbuf.pContext = nullptr;
 
             m_sourceVoice->SubmitSourceBuffer(&xbuf);
             m_currentBufferIndex = (m_currentBufferIndex + 1) % NUM_BUFFERS;
             state.BuffersQueued++;
+        }
+
+        // A physical underrun is only possible once XAudio2 itself has no
+        // queued buffer. Re-prime before resuming so we never inject silence.
+        if (m_voiceStarted.load() && state.BuffersQueued == 0) {
+            MediaDiagnostics::instance().recordTrueAudioUnderrun(0.0);
+            m_sourceVoice->Stop(0);
+            m_voiceStarted.store(false);
+            m_waitingForPreroll.store(true);
+        }
+
+        if (!m_voiceStarted.load() && state.BuffersQueued > 0) {
+            HRESULT hr = m_sourceVoice->Start(0);
+            if (SUCCEEDED(hr)) {
+                m_voiceStarted.store(true);
+            } else {
+                LOG_ERROR("AudioEngine: Failed to start Source Voice after queue priming (hr=0x{:08X}).", static_cast<unsigned int>(hr));
+            }
         }
 
         std::unique_lock<std::mutex> lock(m_bufferMutex);

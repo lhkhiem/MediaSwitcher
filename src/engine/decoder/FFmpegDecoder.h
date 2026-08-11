@@ -80,7 +80,11 @@ private:
     std::mutex m_queueMutex;
     std::deque<AVPacket*> m_videoPacketQueue;
     std::deque<AVPacket*> m_audioPacketQueue;
+    size_t m_videoPacketBytes{0};
 
-    size_t m_maxVideoQueueSize{20};   // Default: 20 packets (~2-10MB for 1080p)
+    // Count keeps normal video latency low; byte budget permits demux to cross
+    // dense H.264 video runs when audio needs packet reserve.
+    static constexpr size_t MAX_VIDEO_PACKET_BYTES = 128u * 1024u * 1024u;
+    size_t m_maxVideoQueueSize{20};
     size_t m_maxAudioQueueSize{200};  // Default: 200 packets (~0.5MB, ~2s audio)
 };

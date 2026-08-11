@@ -62,6 +62,8 @@ set(SOURCES
     engine/decoder/FFmpegDecoder.h
     engine/audio/AudioEngine.cpp
     engine/audio/AudioEngine.h
+    engine/diagnostics/MediaDiagnostics.cpp
+    engine/diagnostics/MediaDiagnostics.h
 )
 
 # MOC

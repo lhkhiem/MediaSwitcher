@@ -65,6 +65,50 @@ private:
     ThumbnailGenerator* m_owner;
 };
 
+class PreviewFrameTask : public QRunnable {
+public:
+    PreviewFrameTask(quint64 sourceId, std::string filePath, SourceType type, int64_t positionMs, ThumbnailGenerator* owner)
+        : m_sourceId(sourceId), m_filePath(std::move(filePath)), m_type(type), m_positionMs(positionMs), m_owner(owner) {}
+
+    void run() override {
+        QImage frame;
+        int64_t durationMs = 0;
+        if (m_type == SourceType::ImageFile) {
+            QImageReader reader(QString::fromStdString(m_filePath));
+            reader.setAutoTransform(true);
+            frame = reader.read();
+        } else if (m_type == SourceType::VideoFile) {
+            FFmpegDecoder decoder;
+            if (decoder.open(m_filePath)) {
+                durationMs = static_cast<int64_t>(decoder.durationSeconds() * 1000.0);
+                if (m_positionMs > 0) decoder.seekToSeconds(static_cast<double>(m_positionMs) / 1000.0);
+                Frame decoded(decoder.width() > 0 ? decoder.width() : 1280,
+                              decoder.height() > 0 ? decoder.height() : 720,
+                              PixelFormat::RGBA32);
+                for (int i = 0; i < 10; ++i) {
+                    if (decoder.decodeNextFrame(decoded) && decoded.data() && decoded.width() > 0 && decoded.height() > 0) {
+                        frame = QImage(decoded.data(), decoded.width(), decoded.height(), QImage::Format_RGBA8888).copy();
+                        break;
+                    }
+                }
+                decoder.close();
+            }
+        }
+        if (frame.isNull()) {
+            frame = QImage(320, 180, QImage::Format_RGBA8888);
+            frame.fill(QColor(34, 36, 51));
+        }
+        emit m_owner->previewFrameReady(m_sourceId, m_positionMs, durationMs, frame);
+    }
+
+private:
+    quint64 m_sourceId;
+    std::string m_filePath;
+    SourceType m_type;
+    int64_t m_positionMs;
+    ThumbnailGenerator* m_owner;
+};
+
 ThumbnailGenerator& ThumbnailGenerator::instance() {
     static ThumbnailGenerator inst;
     return inst;
@@ -72,6 +116,12 @@ ThumbnailGenerator& ThumbnailGenerator::instance() {
 
 void ThumbnailGenerator::requestThumbnail(int sourceId, const std::string& filePath, SourceType type) {
     auto* task = new ThumbnailTask(sourceId, filePath, type, this);
+    task->setAutoDelete(true);
+    QThreadPool::globalInstance()->start(task);
+}
+
+void ThumbnailGenerator::requestPreviewFrame(quint64 sourceId, const std::string& filePath, SourceType type, int64_t positionMs) {
+    auto* task = new PreviewFrameTask(sourceId, filePath, type, positionMs, this);
     task->setAutoDelete(true);
     QThreadPool::globalInstance()->start(task);
 }

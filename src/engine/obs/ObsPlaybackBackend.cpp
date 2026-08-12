@@ -24,8 +24,9 @@ std::string toUtf8Path(const std::filesystem::path& path) {
 ObsPlaybackBackend::ObsPlaybackBackend(ObsContext& context) : m_context(context) {}
 ObsPlaybackBackend::~ObsPlaybackBackend() { close(); }
 
-bool ObsPlaybackBackend::open(const std::filesystem::path& path) {
+bool ObsPlaybackBackend::open(const std::filesystem::path& path, bool startPaused) {
     close();
+    m_pauseRequested.store(startPaused);
     if (!m_context.isInitialized()) {
         LOG_ERROR("OBS media: Cannot open source because ObsContext is not initialized.");
         return false;
@@ -45,7 +46,9 @@ bool ObsPlaybackBackend::open(const std::filesystem::path& path) {
     obs_data_set_bool(settings, "is_local_file", true);
     obs_data_set_string(settings, "local_file", utf8Path.constData());
     obs_data_set_bool(settings, "looping", m_looping);
-    obs_data_set_bool(settings, "restart_on_activate", false);
+    // Create the source inactive. This lets a Preview request register its
+    // paused intent before ffmpeg_source receives its first start action.
+    obs_data_set_bool(settings, "restart_on_activate", true);
     obs_data_set_bool(settings, "clear_on_media_end", true);
 
     LOG_INFO("OBS media: Creating ffmpeg_source with UTF-8 path.");
@@ -75,7 +78,7 @@ bool ObsPlaybackBackend::open(const std::filesystem::path& path) {
     LOG_INFO("OBS media: Source attached; enabling audio monitoring.");
     m_path = absolutePath;
     m_audioMonitoringEnabled = m_audioOutputEnabled && setAudioMonitoring(true);
-    LOG_INFO("OBS media: Created '{}' source for '{}'.", kSourceType, toUtf8Path(m_path));
+    LOG_INFO("OBS media: Created '{}' source for '{}'; startPaused={}", kSourceType, toUtf8Path(m_path), startPaused);
     return true;
 }
 
@@ -100,12 +103,14 @@ void ObsPlaybackBackend::close() {
     m_path.clear();
     m_audioMonitoringEnabled = false;
     m_sourceActive = false;
+    m_pauseRequested.store(false);
     m_mediaEnded.store(false);
 }
 
 void ObsPlaybackBackend::play() {
     if (!m_source) return;
 
+    m_pauseRequested.store(false);
     // Recreate the monitor before resuming so it starts from OBS's current media clock.
     if (m_audioOutputEnabled && !setAudioMonitoring(true)) {
         LOG_ERROR("OBS media: Play/resume cancelled because audio monitoring could not be enabled.");
@@ -119,15 +124,29 @@ void ObsPlaybackBackend::play() {
 void ObsPlaybackBackend::pause() {
     if (!m_source) return;
 
+    // ffmpeg_source may finish opening after this call. Keep this intent so
+    // onMediaStarted can pause it again after OBS completes asynchronous open.
+    m_pauseRequested.store(true);
     // Destroying the monitor stops its WASAPI client and discards PCM already queued to it.
     setAudioMonitoring(false);
     obs_source_media_play_pause(m_source, true);
     LOG_INFO("OBS media: Pause requested after audio monitor flush.");
 }
 
+void ObsPlaybackBackend::enforcePendingPause() {
+    if (!m_source || !m_pauseRequested.load() || state() != ObsPlaybackState::Playing) return;
+
+    // ffmpeg_source ignores a pause issued while its start callback is still
+    // running. Call on the next UI timer tick, after media_started returns.
+    setAudioMonitoring(false);
+    obs_source_media_play_pause(m_source, true);
+    LOG_INFO("OBS media: Applied pending pause after source startup completed.");
+}
+
 void ObsPlaybackBackend::stop() {
     if (!m_source) return;
 
+    m_pauseRequested.store(true);
     setAudioMonitoring(false);
     obs_source_media_stop(m_source);
     m_mediaEnded.store(false);
@@ -223,6 +242,7 @@ void ObsPlaybackBackend::logDiagnostics() const {
 void ObsPlaybackBackend::onMediaStarted(void* data, calldata_t*) {
     auto* backend = static_cast<ObsPlaybackBackend*>(data);
     backend->m_mediaEnded.store(false);
+    if (backend->m_pauseRequested.load()) LOG_INFO("OBS media: Pending pause will be applied after startup callback.");
     LOG_INFO("OBS media: Source signalled media_started.");
 }
 

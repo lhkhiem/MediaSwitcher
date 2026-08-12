@@ -2,13 +2,25 @@
 
 #include <stdexcept>
 
-void ObsPlaylist::setItems(std::vector<std::filesystem::path> items) {
-    m_items = std::move(items);
-    m_currentIndex = 0;
+void ObsPlaylist::addSource(uint64_t sourceId) {
+    if (sourceId != 0) m_items.push_back(sourceId);
 }
 
-void ObsPlaylist::appendItems(std::vector<std::filesystem::path> items) {
-    m_items.insert(m_items.end(), std::make_move_iterator(items.begin()), std::make_move_iterator(items.end()));
+bool ObsPlaylist::removeAt(size_t index) {
+    if (index >= m_items.size()) return false;
+    m_items.erase(m_items.begin() + static_cast<std::ptrdiff_t>(index));
+    if (m_items.empty()) m_currentIndex = 0;
+    else if (m_currentIndex >= m_items.size()) m_currentIndex = m_items.size() - 1;
+    return true;
+}
+
+bool ObsPlaylist::move(size_t from, size_t to) {
+    if (from >= m_items.size() || to >= m_items.size() || from == to) return false;
+    const uint64_t sourceId = m_items[from];
+    m_items.erase(m_items.begin() + static_cast<std::ptrdiff_t>(from));
+    m_items.insert(m_items.begin() + static_cast<std::ptrdiff_t>(to), sourceId);
+    if (m_currentIndex == from) m_currentIndex = to;
+    return true;
 }
 
 void ObsPlaylist::clear() {
@@ -16,9 +28,14 @@ void ObsPlaylist::clear() {
     m_currentIndex = 0;
 }
 
-const std::filesystem::path& ObsPlaylist::current() const {
+uint64_t ObsPlaylist::currentSourceId() const {
     if (m_items.empty()) throw std::logic_error("OBS playlist has no current item");
     return m_items[m_currentIndex];
+}
+
+uint64_t ObsPlaylist::sourceIdAt(size_t index) const {
+    if (index >= m_items.size()) throw std::out_of_range("OBS playlist index is invalid");
+    return m_items[index];
 }
 
 bool ObsPlaylist::advance() {
@@ -41,12 +58,4 @@ bool ObsPlaylist::previous() {
     if (!m_loop) return false;
     m_currentIndex = m_items.size() - 1;
     return true;
-}
-
-const std::filesystem::path* ObsPlaylist::offset(size_t distance) const {
-    if (m_items.empty()) return nullptr;
-    const size_t index = m_currentIndex + distance;
-    if (index < m_items.size()) return &m_items[index];
-    if (!m_loop) return nullptr;
-    return &m_items[index % m_items.size()];
 }

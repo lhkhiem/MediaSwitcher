@@ -24,10 +24,11 @@ public:
     ObsPlaybackBackend(const ObsPlaybackBackend&) = delete;
     ObsPlaybackBackend& operator=(const ObsPlaybackBackend&) = delete;
 
-    bool open(const std::filesystem::path& path);
+    bool open(const std::filesystem::path& path, bool startPaused = false);
     void close();
     void play();
     void pause();
+    void enforcePendingPause();
     void stop();
     bool seekMs(int64_t milliseconds);
     int64_t positionMs() const;
@@ -64,5 +65,6 @@ private:
     bool m_audioMonitoringEnabled{false};
     bool m_sourceActive{false};
     bool m_mediaSignalsConnected{false};
+    std::atomic_bool m_pauseRequested{false};
     std::atomic_bool m_mediaEnded{false};
 };

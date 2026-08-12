@@ -115,7 +115,7 @@ private:
     enum class GridRowsMode { OneRow, TwoRows, ThreeRows, AutoGrid };
     enum class ThumbnailSize { Small, Normal, Large };
 
-    GridRowsMode m_rowsMode{GridRowsMode::OneRow};
+    GridRowsMode m_rowsMode{GridRowsMode::AutoGrid};
     ThumbnailSize m_thumbSize{ThumbnailSize::Normal};
 
     QString m_activeCategory{"ALL"};

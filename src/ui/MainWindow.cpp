@@ -9,6 +9,7 @@
 #include "engine/input/GlobalPlaylistController.h"
 #include "engine/audio/AudioEngine.h"
 #include "common/logger/Logger.h"
+#include <algorithm>
 #include <chrono>
 #include <windows.h>
 #include <psapi.h>
@@ -83,6 +84,10 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 void MainWindow::resizeEvent(QResizeEvent* event) {
     QMainWindow::resizeEvent(event);
     updateViewports();
+
+    if (m_rowsMode == GridRowsMode::AutoGrid && m_dockContainer) {
+        QTimer::singleShot(0, this, &MainWindow::rebuildInputDock);
+    }
 }
 
 void MainWindow::setupUi() {
@@ -1257,7 +1262,9 @@ void MainWindow::rebuildInputDock() {
             int col = cardIndex / 2;
             gridLayout->addWidget(slotWidget, row, col);
         } else if (m_rowsMode == GridRowsMode::AutoGrid) {
-            int maxColsPerLine = 8;
+            const int availableWidth = (std::max)(1, m_dockContainer->width());
+            const int maxColsPerLine = (std::max)(1, (availableWidth + gridLayout->spacing()) /
+                                                      (cardW + gridLayout->spacing()));
             int row = cardIndex / maxColsPerLine;
             int col = cardIndex % maxColsPerLine;
             gridLayout->addWidget(slotWidget, row, col);
@@ -1284,26 +1291,27 @@ void MainWindow::onAddVideoInput() {
                      "Video Files (*.mp4 *.mkv *.mov *.avi *.flv *.wmv *.webm *.ts *.m4v *.mpg *.mpeg *.vob *.3gp *.m2ts *.mts);;"
                      "Image Files (*.png *.jpg *.jpeg *.bmp *.webp *.gif *.tiff);;"
                      "All Files (*.*)";
-    QStringList filePaths = QFileDialog::getOpenFileNames(this, "Select Media Files (Multi-Select)", "", filter);
+    QFileDialog dialog(this, "Add media inputs");
+    dialog.setFileMode(QFileDialog::ExistingFiles);
+    dialog.setNameFilter(filter);
+    dialog.setOption(QFileDialog::DontUseNativeDialog, true);
+    dialog.setViewMode(QFileDialog::Detail);
+    dialog.setWindowState(Qt::WindowMaximized);
+
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    const QStringList filePaths = dialog.selectedFiles();
 
     if (filePaths.isEmpty()) return;
 
     int addedCount = 0;
-    int firstAddedSlotId = -1;
     for (const QString& filePath : filePaths) {
         if (filePath.isEmpty()) continue;
         std::string utf8Path = filePath.toUtf8().toStdString();
         int slotId = m_inputManager.addFileSlot(utf8Path);
         if (slotId > 0) {
             addedCount++;
-            if (firstAddedSlotId <= 0) {
-                firstAddedSlotId = slotId;
-            }
         }
-    }
-
-    if (firstAddedSlotId > 0 && m_inputManager.previewSlotId() <= 0) {
-        m_inputManager.setPreviewSlot(firstAddedSlotId);
     }
 
     if (addedCount == 1) {

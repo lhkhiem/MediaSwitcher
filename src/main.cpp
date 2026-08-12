@@ -5,12 +5,15 @@
 #include "engine/audio/AudioEngine.h"
 #ifdef MEDIASWITCHER_ENABLE_OBS
 #include "engine/obs/ObsContext.h"
+#include "engine/obs/ObsPlaybackBackend.h"
 #include "ui/ObsDualMediaTestWindow.h"
 #include "ui/ObsMediaTestWindow.h"
 #endif
 
 #include <QApplication>
+#include <QEventLoop>
 #include <QIcon>
+#include <QTimer>
 #include <filesystem>
 
 #ifdef _WIN32
@@ -34,6 +37,20 @@ QString obsDualMediaTestPath(const QStringList& arguments) {
         if (argument.startsWith(prefix)) return argument.mid(prefix.size());
     }
     return {};
+}
+
+QString obsPauseSmokeTestPath(const QStringList& arguments) {
+    const QString prefix = QStringLiteral("--obs-pause-smoke-test=");
+    for (const QString& argument : arguments) {
+        if (argument.startsWith(prefix)) return argument.mid(prefix.size());
+    }
+    return {};
+}
+
+void waitForObsLifecycle(int milliseconds) {
+    QEventLoop loop;
+    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
+    loop.exec();
 }
 }
 #endif
@@ -61,6 +78,7 @@ int main(int argc, char* argv[]) {
 #ifdef MEDIASWITCHER_ENABLE_OBS
     const QString mediaTestPath = obsMediaTestPath(QCoreApplication::arguments());
     const QString dualMediaTestPath = obsDualMediaTestPath(QCoreApplication::arguments());
+    const QString pauseSmokeTestPath = obsPauseSmokeTestPath(QCoreApplication::arguments());
     if (!dualMediaTestPath.isEmpty()) {
         LOG_INFO("Startup mode: OBS dual media test");
         LOG_INFO("OBS compiled: yes");
@@ -99,9 +117,55 @@ int main(int argc, char* argv[]) {
         return result;
     }
 
-    LOG_INFO("Startup mode: Legacy");
-    LOG_INFO("OBS compiled: yes");
-    LOG_INFO("OBS initialized: no");
+    if (!pauseSmokeTestPath.isEmpty()) {
+        LOG_INFO("Startup mode: OBS pause smoke test");
+        ObsContext obsContext;
+        if (!obsContext.initialize()) {
+            LOG_ERROR("OBS pause smoke test could not initialize OBS.");
+            return -1;
+        }
+
+        ObsPlaybackBackend preview(obsContext);
+        preview.setAudioOutputEnabled(false);
+        if (!preview.open(std::filesystem::path(pauseSmokeTestPath.toStdWString()), true)) {
+            LOG_ERROR("OBS pause smoke test could not open the media file.");
+            return -1;
+        }
+
+        waitForObsLifecycle(250);
+        preview.enforcePendingPause();
+        waitForObsLifecycle(250);
+        const auto firstState = preview.state();
+        const auto firstPosition = preview.positionMs();
+        waitForObsLifecycle(1000);
+        const auto secondState = preview.state();
+        const auto secondPosition = preview.positionMs();
+        const bool passed = firstState == ObsPlaybackState::Paused && secondState == ObsPlaybackState::Paused &&
+                            std::abs(secondPosition - firstPosition) <= 50;
+        LOG_INFO("OBS pause smoke: state1={} position1={}ms state2={} position2={}ms result={}",
+                 static_cast<int>(firstState), firstPosition, static_cast<int>(secondState), secondPosition,
+                 passed ? "PASS" : "FAIL");
+        preview.close();
+        return passed ? 0 : 1;
+    }
+
+    {
+        LOG_INFO("Startup mode: OBS application");
+        LOG_INFO("OBS compiled: yes");
+        ObsContext obsContext;
+        if (!obsContext.initialize()) {
+            LOG_ERROR("OBS application startup failed because OBS initialization failed.");
+            return -1;
+        }
+        LOG_INFO("OBS initialized: yes");
+
+        ObsDualMediaTestWindow mainWindow(obsContext);
+        mainWindow.show();
+        LOG_INFO("OBS application running with an empty Input Bank.");
+        const int result = app.exec();
+        LOG_INFO("OBS application exiting with code {}.", result);
+        return result;
+    }
 #endif
 
     if (!AudioEngine::instance().initialize()) {

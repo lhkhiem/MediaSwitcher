@@ -90,14 +90,9 @@ int InputManager::addColorBarsSlot(const std::string& name) {
     m_slots.push_back(slot);
     int newId = slot.id;
 
-    if (m_previewSlotId == -1) {
-        m_previewSlotId = newId;
-    }
-
     updateActivePlaybackInstances();
 
     if (m_onInputListChanged) m_onInputListChanged();
-    if (m_onPreviewChanged) m_onPreviewChanged();
     return newId;
 }
 
@@ -139,16 +134,11 @@ int InputManager::addFileSlot(const std::string& filePath, const std::string& na
     m_slots.push_back(slot);
     int newId = slot.id;
 
-    if (m_previewSlotId == -1) {
-        m_previewSlotId = newId;
-    }
-
     updateActivePlaybackInstances();
 
     LOG_INFO("InputManager: Registered slot #{} '{}' (IDLE state)", newId, slot.name);
 
     if (m_onInputListChanged) m_onInputListChanged();
-    if (m_onPreviewChanged) m_onPreviewChanged();
     return newId;
 }
 
@@ -163,10 +153,10 @@ bool InputManager::removeSlot(int slotId) {
         m_slots.erase(it);
 
         if (m_previewSlotId == slotId) {
-            m_previewSlotId = m_slots.empty() ? -1 : m_slots.front().id;
+            m_previewSlotId = -1;
         }
         if (m_programSlotId == slotId) {
-            m_programSlotId = m_slots.empty() ? -1 : m_slots.front().id;
+            m_programSlotId = -1;
         }
         if (m_preloadSlotId == slotId) {
             m_preloadSlotId = -1;
@@ -192,6 +182,10 @@ InputSlot* InputManager::getSlot(int slotId) {
 void InputManager::setPreviewSlot(int slotId) {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
+        if (!getSlot(slotId)) {
+            LOG_WARN("InputManager: Ignored preview selection for unknown slot #{}", slotId);
+            return;
+        }
         m_previewSlotId = slotId;
         updateActivePlaybackInstances();
     }

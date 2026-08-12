@@ -66,6 +66,17 @@ set(SOURCES
     engine/diagnostics/MediaDiagnostics.h
 )
 
+if (MEDIASWITCHER_ENABLE_OBS)
+    list(APPEND SOURCES
+        engine/obs/ObsContext.cpp
+        engine/obs/ObsContext.h
+        engine/obs/ObsPlaybackBackend.cpp
+        engine/obs/ObsPlaybackBackend.h
+        ui/ObsMediaTestWindow.cpp
+        ui/ObsMediaTestWindow.h
+    )
+endif()
+
 # MOC
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
@@ -94,6 +105,32 @@ target_link_libraries(MediaSwitcher PRIVATE
     ${FFMPEG_LIBRARIES}
 )
 
+if (MEDIASWITCHER_ENABLE_OBS)
+    # libobs Windows resolves data and plugin paths relative to bin/64bit.
+    set(OBS_DEPLOY_ROOT "${CMAKE_BINARY_DIR}/obs-runtime-stage")
+    set_target_properties(MediaSwitcher PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${OBS_DEPLOY_ROOT}/bin/64bit"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE "${OBS_DEPLOY_ROOT}/bin/64bit"
+    )
+
+    target_link_libraries(MediaSwitcher PRIVATE OBS::libobs)
+    target_compile_definitions(MediaSwitcher PRIVATE MEDIASWITCHER_ENABLE_OBS=1)
+
+    add_custom_command(TARGET MediaSwitcher POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${OBS_RUNTIME_BIN_DIR}"
+            "$<TARGET_FILE_DIR:MediaSwitcher>"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${OBS_RUNTIME_PLUGIN_BIN_DIR}"
+            "$<TARGET_FILE_DIR:MediaSwitcher>/../../obs-plugins/64bit"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${OBS_RUNTIME_PLUGIN_DATA_DIR}"
+            "$<TARGET_FILE_DIR:MediaSwitcher>/../../data/obs-plugins"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${OBS_RUNTIME_CORE_DATA_DIR}"
+            "$<TARGET_FILE_DIR:MediaSwitcher>/../../data/libobs"
+    )
+endif()
 # Copy FFmpeg DLLs to output directory post-build
 add_custom_command(TARGET MediaSwitcher POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -112,7 +149,7 @@ add_custom_command(TARGET MediaSwitcher POST_BUILD
 get_target_property(QT_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
 get_filename_component(QT_BIN_DIR "${QT_QMAKE_EXECUTABLE}" DIRECTORY)
 add_custom_command(TARGET MediaSwitcher POST_BUILD
-    COMMAND "${QT_BIN_DIR}/windeployqt.exe" --no-compiler-runtime --no-system-d3d-compiler "$<TARGET_FILE:MediaSwitcher>"
+    COMMAND ${CMAKE_COMMAND} -E env "PATH=${QT_BIN_DIR}\\;$ENV{PATH}" "${QT_BIN_DIR}/windeployqt.exe" --no-compiler-runtime --no-system-d3d-compiler "$<TARGET_FILE:MediaSwitcher>"
 )
 
 # Compile options

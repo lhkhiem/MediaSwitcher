@@ -3,93 +3,108 @@
 #include "app/WorkspaceManager.h"
 #include "ui/MainWindow.h"
 #include "engine/audio/AudioEngine.h"
+#ifdef MEDIASWITCHER_ENABLE_OBS
+#include "engine/obs/ObsContext.h"
+#include "ui/ObsMediaTestWindow.h"
+#endif
 
 #include <QApplication>
 #include <QIcon>
-#include <iostream>
+#include <filesystem>
 
 #ifdef _WIN32
 #include <windows.h>
-#define IDI_APPICON 101   // Must match resource.rc
+#define IDI_APPICON 101
 #endif
 
-int main(int argc, char *argv[]) {
-    // 1. Initialize Logger
+#ifdef MEDIASWITCHER_ENABLE_OBS
+namespace {
+QString obsMediaTestPath(const QStringList& arguments) {
+    const QString prefix = QStringLiteral("--obs-media-test=");
+    for (const QString& argument : arguments) {
+        if (argument.startsWith(prefix)) return argument.mid(prefix.size());
+    }
+    return {};
+}
+}
+#endif
+
+int main(int argc, char* argv[]) {
     Logger::init();
     LOG_INFO("Starting MediaSwitcher...");
 
-    // 2. Initialize Workspace
     WorkspaceManager workspaceManager;
     if (!workspaceManager.initialize()) {
         LOG_ERROR("Failed to initialize workspace.");
         return -1;
     }
 
-    // 3. Initialize Qt Application
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(AppInfo::COMPANY);
     QCoreApplication::setApplicationName(AppInfo::NAME);
     QCoreApplication::setApplicationVersion(AppInfo::VERSION);
 
-    // Set application icon — load from the .ico file embedded alongside the exe.
-    // This ensures icon appears on title bar, taskbar, and Alt+Tab.
-    // The .ico is copied to the exe directory as part of the build.
-    {
-        QString exeDir = QCoreApplication::applicationDirPath();
-        QString icoPath = exeDir + "/app_icon.ico";
-        QIcon appIcon(icoPath);
-        if (appIcon.isNull()) {
-            // Fallback: try relative path (dev mode, running from build root)
-            appIcon = QIcon(":/app_icon.ico");
+    const QString iconPath = QCoreApplication::applicationDirPath() + "/app_icon.ico";
+    QIcon appIcon(iconPath);
+    if (appIcon.isNull()) appIcon = QIcon(":/app_icon.ico");
+    if (!appIcon.isNull()) app.setWindowIcon(appIcon);
+
+#ifdef MEDIASWITCHER_ENABLE_OBS
+    const QString mediaTestPath = obsMediaTestPath(QCoreApplication::arguments());
+    if (!mediaTestPath.isEmpty()) {
+        LOG_INFO("Startup mode: OBS media test");
+        LOG_INFO("OBS compiled: yes");
+
+        ObsContext obsContext;
+        if (!obsContext.initialize()) {
+            LOG_ERROR("OBS media test requested but OBS initialization failed.");
+            return -1;
         }
-        if (!appIcon.isNull()) {
-            app.setWindowIcon(appIcon);
-        }
+        LOG_INFO("OBS initialized: yes");
+
+        ObsMediaTestWindow testWindow(obsContext, std::filesystem::path(mediaTestPath.toStdWString()));
+        testWindow.show();
+        LOG_INFO("OBS media test running for '{}'.", mediaTestPath.toStdString());
+        const int result = app.exec();
+        LOG_INFO("OBS media test exiting with code {}.", result);
+        return result;
     }
 
-    // 4. Initialize XAudio2 Engine
+    LOG_INFO("Startup mode: Legacy");
+    LOG_INFO("OBS compiled: yes");
+    LOG_INFO("OBS initialized: no");
+#endif
+
     if (!AudioEngine::instance().initialize()) {
         LOG_ERROR("Failed to initialize AudioEngine (XAudio2). Audio will be silent.");
     }
 
-    // 5. Create and Show Main Window
-    MainWindow mainWindow;
-    mainWindow.show();
-
-#ifdef _WIN32
-    // Force-set the window icon via Win32 WM_SETICON.
-    // This is the definitive way to make the Windows taskbar show the correct icon.
-    // QApplication::setWindowIcon() alone is not sufficient for the taskbar button.
-    {
-        HICON hIconBig = (HICON)LoadImageW(
-            GetModuleHandleW(nullptr),
-            MAKEINTRESOURCEW(IDI_APPICON),   // numeric ID 101
-            IMAGE_ICON,
-            GetSystemMetrics(SM_CXICON),     // 32x32
-            GetSystemMetrics(SM_CYICON),
-            LR_SHARED
-        );
-        HICON hIconSmall = (HICON)LoadImageW(
-            GetModuleHandleW(nullptr),
-            MAKEINTRESOURCEW(IDI_APPICON),   // numeric ID 101
-            IMAGE_ICON,
-            GetSystemMetrics(SM_CXSMICON),   // 16x16
-            GetSystemMetrics(SM_CYSMICON),
-            LR_SHARED
-        );
-        HWND hwnd = (HWND)mainWindow.winId();
-        if (hIconBig)   SendMessageW(hwnd, WM_SETICON, ICON_BIG,   (LPARAM)hIconBig);
-        if (hIconSmall) SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIconSmall);
-    }
+#ifndef MEDIASWITCHER_ENABLE_OBS
+    LOG_INFO("Startup mode: Legacy");
+    LOG_INFO("OBS compiled: no");
+    LOG_INFO("OBS initialized: no");
 #endif
 
-    LOG_INFO("MediaSwitcher running.");
-    int result = app.exec();
+    int result = 0;
+    {
+        MainWindow mainWindow;
+        mainWindow.show();
 
-    // 6. Shutdown AudioEngine before exit
+#ifdef _WIN32
+        const auto hwnd = reinterpret_cast<HWND>(mainWindow.winId());
+        const auto setIcon = [hwnd](int metric, WPARAM size) {
+            HICON icon = static_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APPICON), IMAGE_ICON, metric, metric, LR_SHARED));
+            if (icon) SendMessageW(hwnd, WM_SETICON, size, reinterpret_cast<LPARAM>(icon));
+        };
+        setIcon(GetSystemMetrics(SM_CXICON), ICON_BIG);
+        setIcon(GetSystemMetrics(SM_CXSMICON), ICON_SMALL);
+#endif
+
+        LOG_INFO("MediaSwitcher running.");
+        result = app.exec();
+    }
+
     AudioEngine::instance().shutdown();
-
     LOG_INFO("MediaSwitcher exiting with code {}", result);
     return result;
 }
-

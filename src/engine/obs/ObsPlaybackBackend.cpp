@@ -6,6 +6,7 @@
 extern "C" {
 #include <graphics/graphics.h>
 #include <obs.h>
+#include <callback/signal.h>
 }
 
 #include <algorithm>
@@ -43,7 +44,7 @@ bool ObsPlaybackBackend::open(const std::filesystem::path& path) {
     }
     obs_data_set_bool(settings, "is_local_file", true);
     obs_data_set_string(settings, "local_file", utf8Path.constData());
-    obs_data_set_bool(settings, "looping", false);
+    obs_data_set_bool(settings, "looping", m_looping);
     obs_data_set_bool(settings, "restart_on_activate", false);
     obs_data_set_bool(settings, "clear_on_media_end", true);
 
@@ -65,6 +66,7 @@ bool ObsPlaybackBackend::open(const std::filesystem::path& path) {
 
     LOG_INFO("OBS media: Attaching source to view.");
     obs_view_set_source(m_view, 0, m_source);
+    connectMediaSignals();
     // obs_view_create creates an AUX view.  It renders video but does not give
     // the source an audio activation reference, which the WASAPI monitor needs.
     obs_source_inc_active(m_source);
@@ -72,7 +74,7 @@ bool ObsPlaybackBackend::open(const std::filesystem::path& path) {
     LOG_INFO("OBS media: Source activated for audio monitoring: active={}", obs_source_active(m_source));
     LOG_INFO("OBS media: Source attached; enabling audio monitoring.");
     m_path = absolutePath;
-    m_audioMonitoringEnabled = setAudioMonitoring(true);
+    m_audioMonitoringEnabled = m_audioOutputEnabled && setAudioMonitoring(true);
     LOG_INFO("OBS media: Created '{}' source for '{}'.", kSourceType, toUtf8Path(m_path));
     return true;
 }
@@ -81,6 +83,7 @@ void ObsPlaybackBackend::close() {
     if (!m_source && !m_view) return;
     LOG_INFO("OBS media: Destroying source for '{}'.", toUtf8Path(m_path));
     setAudioMonitoring(false);
+    disconnectMediaSignals();
     if (m_source && m_sourceActive) {
         obs_source_dec_active(m_source);
         m_sourceActive = false;
@@ -97,17 +100,19 @@ void ObsPlaybackBackend::close() {
     m_path.clear();
     m_audioMonitoringEnabled = false;
     m_sourceActive = false;
+    m_mediaEnded.store(false);
 }
 
 void ObsPlaybackBackend::play() {
     if (!m_source) return;
 
     // Recreate the monitor before resuming so it starts from OBS's current media clock.
-    if (!setAudioMonitoring(true)) {
+    if (m_audioOutputEnabled && !setAudioMonitoring(true)) {
         LOG_ERROR("OBS media: Play/resume cancelled because audio monitoring could not be enabled.");
         return;
     }
     obs_source_media_play_pause(m_source, false);
+    m_mediaEnded.store(false);
     LOG_INFO("OBS media: Play/resume requested after audio monitor flush.");
 }
 
@@ -125,6 +130,7 @@ void ObsPlaybackBackend::stop() {
 
     setAudioMonitoring(false);
     obs_source_media_stop(m_source);
+    m_mediaEnded.store(false);
     LOG_INFO("OBS media: Stop requested after audio monitor flush.");
 }
 
@@ -135,7 +141,8 @@ bool ObsPlaybackBackend::seekMs(int64_t milliseconds) {
     const bool resumeAfterSeek = state() == ObsPlaybackState::Playing;
     setAudioMonitoring(false);
     obs_source_media_set_time(m_source, target);
-    if (resumeAfterSeek && !setAudioMonitoring(true)) {
+    m_mediaEnded.store(false);
+    if (resumeAfterSeek && m_audioOutputEnabled && !setAudioMonitoring(true)) {
         LOG_ERROR("OBS media: Seek completed but audio monitoring could not be re-enabled.");
         return false;
     }
@@ -148,6 +155,49 @@ int64_t ObsPlaybackBackend::durationMs() const { return m_source ? obs_source_me
 ObsPlaybackState ObsPlaybackBackend::state() const { return m_source ? mapState(static_cast<int>(obs_source_media_get_state(m_source))) : ObsPlaybackState::None; }
 bool ObsPlaybackBackend::isAvailable() const { return m_context.isInitialized(); }
 bool ObsPlaybackBackend::isOpen() const { return m_source != nullptr; }
+
+void ObsPlaybackBackend::setLooping(bool enabled) {
+    if (m_looping == enabled) return;
+    m_looping = enabled;
+    if (!m_source) return;
+
+    obs_data_t* settings = obs_source_get_settings(m_source);
+    if (!settings) {
+        LOG_ERROR("OBS media: Cannot update loop setting because source settings are unavailable.");
+        return;
+    }
+    obs_data_set_bool(settings, "looping", enabled);
+    obs_source_update(m_source, settings);
+    obs_data_release(settings);
+    LOG_INFO("OBS media: Looping {}.", enabled ? "enabled" : "disabled");
+}
+
+void ObsPlaybackBackend::setAudioOutputEnabled(bool enabled) {
+    if (m_audioOutputEnabled == enabled) return;
+
+    m_audioOutputEnabled = enabled;
+    if (!m_source) return;
+
+    if (!enabled) {
+        setAudioMonitoring(false);
+        LOG_INFO("OBS media: Audio output disabled for this playback instance.");
+        return;
+    }
+
+    if (state() == ObsPlaybackState::Playing && !setAudioMonitoring(true)) {
+        LOG_ERROR("OBS media: Failed to enable audio output for the playing instance.");
+    } else {
+        LOG_INFO("OBS media: Audio output enabled for this playback instance.");
+    }
+}
+
+void ObsPlaybackBackend::setRenderSource(obs_source_t* source) {
+    if (m_view) obs_view_set_source(m_view, 0, source);
+}
+
+void ObsPlaybackBackend::resetRenderSource() {
+    setRenderSource(m_source);
+}
 
 void ObsPlaybackBackend::render(uint32_t width, uint32_t height) const {
     if (!m_view || width == 0 || height == 0) return;
@@ -167,7 +217,35 @@ void ObsPlaybackBackend::render(uint32_t width, uint32_t height) const {
 }
 
 void ObsPlaybackBackend::logDiagnostics() const {
-    LOG_INFO("OBS media: state={} position={} ms duration={} ms monitored={} sourceActive={}", static_cast<int>(state()), positionMs(), durationMs(), m_audioMonitoringEnabled, m_source && obs_source_active(m_source));
+    LOG_INFO("OBS media: state={} position={} ms duration={} ms looping={} ended={} audioOutput={} monitored={} sourceActive={}", static_cast<int>(state()), positionMs(), durationMs(), m_looping, m_mediaEnded.load(), m_audioOutputEnabled, m_audioMonitoringEnabled, m_source && obs_source_active(m_source));
+}
+
+void ObsPlaybackBackend::onMediaStarted(void* data, calldata_t*) {
+    auto* backend = static_cast<ObsPlaybackBackend*>(data);
+    backend->m_mediaEnded.store(false);
+    LOG_INFO("OBS media: Source signalled media_started.");
+}
+
+void ObsPlaybackBackend::onMediaEnded(void* data, calldata_t*) {
+    auto* backend = static_cast<ObsPlaybackBackend*>(data);
+    backend->m_mediaEnded.store(true);
+    LOG_INFO("OBS media: Source signalled media_ended. looping={}", backend->m_looping);
+}
+
+void ObsPlaybackBackend::connectMediaSignals() {
+    if (!m_source || m_mediaSignalsConnected) return;
+    signal_handler_t* signalHandler = obs_source_get_signal_handler(m_source);
+    signal_handler_connect(signalHandler, "media_started", onMediaStarted, this);
+    signal_handler_connect(signalHandler, "media_ended", onMediaEnded, this);
+    m_mediaSignalsConnected = true;
+}
+
+void ObsPlaybackBackend::disconnectMediaSignals() {
+    if (!m_source || !m_mediaSignalsConnected) return;
+    signal_handler_t* signalHandler = obs_source_get_signal_handler(m_source);
+    signal_handler_disconnect(signalHandler, "media_started", onMediaStarted, this);
+    signal_handler_disconnect(signalHandler, "media_ended", onMediaEnded, this);
+    m_mediaSignalsConnected = false;
 }
 
 ObsPlaybackState ObsPlaybackBackend::mapState(int obsState) {

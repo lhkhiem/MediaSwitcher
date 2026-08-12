@@ -50,8 +50,11 @@ foreach ($file in $binFiles) {
     Copy-Item -LiteralPath "$artifactRoot\bin\64bit\$file" -Destination "$RuntimeRoot\bin\64bit\$file"
 }
 Copy-Item -LiteralPath "$artifactRoot\obs-plugins\64bit\obs-ffmpeg.dll" -Destination "$RuntimeRoot\obs-plugins\64bit\obs-ffmpeg.dll"
+Copy-Item -LiteralPath "$artifactRoot\obs-plugins\64bit\obs-transitions.dll" -Destination "$RuntimeRoot\obs-plugins\64bit\obs-transitions.dll"
 Copy-Item -LiteralPath "$artifactRoot\data\libobs" -Destination "$RuntimeRoot\data" -Recurse
 Copy-Item -LiteralPath "$artifactRoot\data\obs-plugins\obs-ffmpeg" -Destination "$RuntimeRoot\data\obs-plugins\obs-ffmpeg" -Recurse
+New-Item -ItemType Directory -Path "$RuntimeRoot\data\obs-plugins\obs-transitions" | Out-Null
+Copy-Item -LiteralPath "$artifactRoot\data\obs-plugins\obs-transitions\fade_transition.effect" -Destination "$RuntimeRoot\data\obs-plugins\obs-transitions\fade_transition.effect"
 Get-ChildItem -LiteralPath "$sourceTree\libobs" -Force | Copy-Item -Destination "$RuntimeRoot\include" -Recurse
 @"
 #pragma once
@@ -103,7 +106,7 @@ if ($LASTEXITCODE -ne 0) { throw "lib.exe failed with exit code $LASTEXITCODE." 
     runtimeSha256 = $runtimeHash
     sourceArtifact = "obs-studio-$version source tag"
     sourceSha256 = $sourceHash
-    modules = @('obs-ffmpeg')
+    modules = @('obs-ffmpeg', 'obs-transitions')
     graphicsBackend = 'libobs-d3d11'
     importLibrary = 'Generated from matching obs.dll export table'
 } | ConvertTo-Json | Set-Content -LiteralPath "$RuntimeRoot\runtime-manifest.json" -Encoding utf8

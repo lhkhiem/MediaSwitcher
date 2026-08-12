@@ -42,6 +42,7 @@ private:
     QLabel* m_statusLabel{nullptr};
     QSlider* m_positionSlider{nullptr};
     QPushButton* m_playPauseButton{nullptr};
+    QPushButton* m_loopButton{nullptr};
     QTimer* m_timer{nullptr};
     obs_display_t* m_display{nullptr};
     qint64 m_lastDiagnosticMs{0};

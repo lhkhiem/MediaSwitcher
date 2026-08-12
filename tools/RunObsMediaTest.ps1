@@ -1,3 +1,7 @@
+param(
+    [switch]$Dual
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -19,7 +23,8 @@ if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
     exit 0
 }
 
-$argument = '--obs-media-test="{0}"' -f $dialog.FileName
+$mode = if ($Dual) { '--obs-dual-media-test' } else { '--obs-media-test' }
+$argument = '{0}="{1}"' -f $mode, $dialog.FileName
 Write-Host "Đang khởi động OBS media test:`n$($dialog.FileName)"
 Start-Process -FilePath $executable -ArgumentList $argument -WorkingDirectory (Split-Path -Parent $executable)
 Write-Host 'Lệnh đã được gửi. Kiểm tra cửa sổ MediaSwitcher OBS Media Test.'

@@ -5,6 +5,7 @@
 #include "engine/audio/AudioEngine.h"
 #ifdef MEDIASWITCHER_ENABLE_OBS
 #include "engine/obs/ObsContext.h"
+#include "ui/ObsDualMediaTestWindow.h"
 #include "ui/ObsMediaTestWindow.h"
 #endif
 
@@ -21,6 +22,14 @@
 namespace {
 QString obsMediaTestPath(const QStringList& arguments) {
     const QString prefix = QStringLiteral("--obs-media-test=");
+    for (const QString& argument : arguments) {
+        if (argument.startsWith(prefix)) return argument.mid(prefix.size());
+    }
+    return {};
+}
+
+QString obsDualMediaTestPath(const QStringList& arguments) {
+    const QString prefix = QStringLiteral("--obs-dual-media-test=");
     for (const QString& argument : arguments) {
         if (argument.startsWith(prefix)) return argument.mid(prefix.size());
     }
@@ -51,6 +60,26 @@ int main(int argc, char* argv[]) {
 
 #ifdef MEDIASWITCHER_ENABLE_OBS
     const QString mediaTestPath = obsMediaTestPath(QCoreApplication::arguments());
+    const QString dualMediaTestPath = obsDualMediaTestPath(QCoreApplication::arguments());
+    if (!dualMediaTestPath.isEmpty()) {
+        LOG_INFO("Startup mode: OBS dual media test");
+        LOG_INFO("OBS compiled: yes");
+
+        ObsContext obsContext;
+        if (!obsContext.initialize()) {
+            LOG_ERROR("OBS dual media test requested but OBS initialization failed.");
+            return -1;
+        }
+        LOG_INFO("OBS initialized: yes");
+
+        ObsDualMediaTestWindow testWindow(obsContext, std::filesystem::path(dualMediaTestPath.toStdWString()));
+        testWindow.show();
+        LOG_INFO("OBS dual media test running for '{}'.", dualMediaTestPath.toStdString());
+        const int result = app.exec();
+        LOG_INFO("OBS dual media test exiting with code {}.", result);
+        return result;
+    }
+
     if (!mediaTestPath.isEmpty()) {
         LOG_INFO("Startup mode: OBS media test");
         LOG_INFO("OBS compiled: yes");

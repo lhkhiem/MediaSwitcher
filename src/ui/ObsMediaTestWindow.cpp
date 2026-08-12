@@ -44,12 +44,14 @@ ObsMediaTestWindow::ObsMediaTestWindow(ObsContext& context, const std::filesyste
 
     auto* controls = new QHBoxLayout();
     m_playPauseButton = new QPushButton(QStringLiteral("Pause"), this);
+    m_loopButton = new QPushButton(QStringLiteral("Loop: Off"), this);
     auto* stopButton = new QPushButton(QStringLiteral("Stop"), this);
     auto* backButton = new QPushButton(QStringLiteral("-10s"), this);
     auto* forwardButton = new QPushButton(QStringLiteral("+10s"), this);
     m_positionSlider = new QSlider(Qt::Horizontal, this);
     m_statusLabel = new QLabel(this);
     controls->addWidget(m_playPauseButton);
+    controls->addWidget(m_loopButton);
     controls->addWidget(stopButton);
     controls->addWidget(backButton);
     controls->addWidget(forwardButton);
@@ -58,6 +60,7 @@ ObsMediaTestWindow::ObsMediaTestWindow(ObsContext& context, const std::filesyste
     layout->addLayout(controls);
 
     connect(m_playPauseButton, &QPushButton::clicked, this, &ObsMediaTestWindow::togglePlayPause);
+    connect(m_loopButton, &QPushButton::clicked, this, [this] { m_backend->setLooping(!m_backend->isLooping()); });
     connect(stopButton, &QPushButton::clicked, this, [this] { m_backend->stop(); });
     connect(backButton, &QPushButton::clicked, this, [this] { seekRelative(-10000); });
     connect(forwardButton, &QPushButton::clicked, this, [this] { seekRelative(10000); });
@@ -178,6 +181,7 @@ void ObsMediaTestWindow::updateStatus() {
     if (!m_sliderDragging && duration > 0) m_positionSlider->setValue(static_cast<int>(position * 1000 / duration));
     m_statusLabel->setText(QStringLiteral("%1 / %2 | state %3").arg(formatMilliseconds(position), formatMilliseconds(duration)).arg(static_cast<int>(m_backend->state())));
     m_playPauseButton->setText(m_backend->state() == ObsPlaybackState::Playing ? QStringLiteral("Pause") : QStringLiteral("Play"));
+    m_loopButton->setText(m_backend->isLooping() ? QStringLiteral("Loop: On") : QStringLiteral("Loop: Off"));
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (m_lastDiagnosticMs == 0 || m_lastDiagnosticMs + 5000 <= now) { m_backend->logDiagnostics(); m_lastDiagnosticMs = now; }
 }

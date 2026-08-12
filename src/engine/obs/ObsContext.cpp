@@ -108,7 +108,9 @@ bool ObsContext::loadModules() {
     const auto pluginBin = m_runtimeRoot / OBS_PLUGIN_BIN_RELATIVE_PATH;
     const auto pluginData = m_runtimeRoot / OBS_PLUGIN_DATA_RELATIVE_PATH;
 
-    if (!std::filesystem::is_directory(pluginBin) || !std::filesystem::is_directory(pluginData / "obs-ffmpeg")) {
+    if (!std::filesystem::is_directory(pluginBin) || !std::filesystem::is_directory(pluginData / "obs-ffmpeg") ||
+        !std::filesystem::exists(pluginBin / "obs-transitions.dll") ||
+        !std::filesystem::exists(pluginData / "obs-transitions" / "fade_transition.effect")) {
         LOG_ERROR("OBS: Runtime module paths are missing. bin='{}' data='{}'.", pluginBin.string(), pluginData.string());
         return false;
     }
@@ -131,6 +133,10 @@ bool ObsContext::loadModules() {
 
     if (!obs_get_module("obs-ffmpeg")) {
         LOG_ERROR("OBS: Required media module 'obs-ffmpeg' was not loaded.");
+        return false;
+    }
+    if (!obs_get_module("obs-transitions")) {
+        LOG_ERROR("OBS: Required transition module 'obs-transitions' was not loaded.");
         return false;
     }
     if (m_loadedModules.empty()) {

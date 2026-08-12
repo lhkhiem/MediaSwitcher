@@ -72,6 +72,10 @@ if (MEDIASWITCHER_ENABLE_OBS)
         engine/obs/ObsContext.h
         engine/obs/ObsPlaybackBackend.cpp
         engine/obs/ObsPlaybackBackend.h
+        engine/obs/ObsPlaylist.cpp
+        engine/obs/ObsPlaylist.h
+        ui/ObsDualMediaTestWindow.cpp
+        ui/ObsDualMediaTestWindow.h
         ui/ObsMediaTestWindow.cpp
         ui/ObsMediaTestWindow.h
     )

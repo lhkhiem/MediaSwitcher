@@ -37,6 +37,8 @@ public:
     const std::vector<ObsCatalogSource>& sources() const { return m_sources; }
 
 private:
+    uint64_t replaceFirstBlank(ObsCatalogSourceType type, std::filesystem::path path, std::string endpoint,
+                               std::string displayName);
     void reconcileSystemBlanks();
 
     uint64_t m_nextId{1};

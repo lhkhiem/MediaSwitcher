@@ -42,21 +42,33 @@ bool obsCatalogSourceHasTimeline(ObsCatalogSourceType type) {
 }
 
 uint64_t ObsSourceCatalog::add(const std::filesystem::path& path) {
-    const uint64_t id = m_nextId++;
-    const auto firstBlank = std::find_if(m_sources.begin(), m_sources.end(), [](const ObsCatalogSource& source) {
-        return source.systemSource;
-    });
-    m_sources.insert(firstBlank, {id, classifyObsLocalFile(path), path, {}, {}, false});
-    reconcileSystemBlanks();
-    return id;
+    return replaceFirstBlank(classifyObsLocalFile(path), path, {}, {});
 }
 
 uint64_t ObsSourceCatalog::addRtsp(std::string endpoint, std::string displayName) {
-    const uint64_t id = m_nextId++;
+    return replaceFirstBlank(ObsCatalogSourceType::RtspCamera, {}, std::move(endpoint), std::move(displayName));
+}
+
+uint64_t ObsSourceCatalog::replaceFirstBlank(ObsCatalogSourceType type, std::filesystem::path path, std::string endpoint,
+                                             std::string displayName) {
     const auto firstBlank = std::find_if(m_sources.begin(), m_sources.end(), [](const ObsCatalogSource& source) {
         return source.systemSource;
     });
-    m_sources.insert(firstBlank, {id, ObsCatalogSourceType::RtspCamera, {}, std::move(endpoint), std::move(displayName), false});
+    if (firstBlank != m_sources.end()) {
+        // Fill the first visible Blank before appending an input.  Display
+        // slot numbers are recalculated from catalog order by the UI.
+        firstBlank->type = type;
+        firstBlank->path = std::move(path);
+        firstBlank->endpoint = std::move(endpoint);
+        firstBlank->displayName = std::move(displayName);
+        firstBlank->systemSource = false;
+        const uint64_t id = firstBlank->id;
+        reconcileSystemBlanks();
+        return id;
+    }
+
+    const uint64_t id = m_nextId++;
+    m_sources.push_back({id, type, std::move(path), std::move(endpoint), std::move(displayName), false});
     reconcileSystemBlanks();
     return id;
 }
@@ -72,6 +84,7 @@ bool ObsSourceCatalog::remove(uint64_t id) {
         return source.id == id;
     });
     if (it == m_sources.end()) return false;
+
     m_sources.erase(it);
     reconcileSystemBlanks();
     return true;
@@ -86,12 +99,16 @@ std::optional<ObsCatalogSource> ObsSourceCatalog::find(uint64_t id) const {
 }
 
 void ObsSourceCatalog::reconcileSystemBlanks() {
-    size_t existingBlankCount = static_cast<size_t>(std::count_if(m_sources.begin(), m_sources.end(), [](const ObsCatalogSource& source) {
-        return source.systemSource;
-    }));
-    while (existingBlankCount < 2) {
+    // Blank is a placeholder only when the catalog has fewer than two input
+    // slots.  Do not maintain two hidden Blank records in addition to real
+    // inputs: that was the cause of duplicate Blank #5/#6 tiles after remove.
+    while (m_sources.size() < 2) {
         const uint64_t id = m_nextId++;
-        m_sources.push_back({id, ObsCatalogSourceType::ColorBlank, {}, {}, "Blank " + std::to_string(existingBlankCount + 1), true});
-        ++existingBlankCount;
+        m_sources.push_back({id, ObsCatalogSourceType::ColorBlank, {}, {}, {}, true});
+    }
+    for (size_t index = 0; index < m_sources.size(); ++index) {
+        if (m_sources[index].systemSource) {
+            m_sources[index].displayName = "Blank " + std::to_string(index + 1);
+        }
     }
 }

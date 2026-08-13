@@ -1392,18 +1392,16 @@ void ObsDualMediaTestWindow::refreshCatalogUi() {
     m_catalogThumbnailLabels.clear();
     m_sourceCatalogList->clear();
     const int selectedType = m_sourceTypeFilter ? m_sourceTypeFilter->currentData().toInt() : -1;
-    const size_t realSourceCount = static_cast<size_t>(std::count_if(m_sourceCatalog->sources().begin(), m_sourceCatalog->sources().end(),
-        [](const ObsCatalogSource& source) { return !source.systemSource; }));
     const int thumbnailHeight = m_catalogThumbnailWidth * 9 / 16;
     const QSize itemSize(m_catalogThumbnailWidth + 14, thumbnailHeight + 10);
-    for (const auto& source : m_sourceCatalog->sources()) {
-        // Blank inputs remain valid on PVW/PGM even when hidden. Their visible
-        // slots are progressively replaced by newly added real sources.
-        if (source.systemSource && (realSourceCount >= 2 || (realSourceCount == 1 && source.displayName != "Blank 2"))) continue;
+    const auto& sources = m_sourceCatalog->sources();
+    for (size_t index = 0; index < sources.size(); ++index) {
+        const auto& source = sources[index];
         if (selectedType >= 0 && selectedType != static_cast<int>(source.type)) continue;
+        const int displaySlot = static_cast<int>(index + 1);
         const QFileInfo info(QString::fromStdWString(source.path.wstring()));
         const QString sourceName = catalogSourceName(source);
-        auto* item = new QListWidgetItem(QStringLiteral("#%1  [%2] %3").arg(source.id).arg(catalogSourceBadge(source), sourceName), m_sourceCatalogList);
+        auto* item = new QListWidgetItem(QStringLiteral("#%1  [%2] %3").arg(displaySlot).arg(catalogSourceBadge(source), sourceName), m_sourceCatalogList);
         item->setSizeHint(itemSize);
         item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(source.id));
         item->setToolTip(source.type == ObsCatalogSourceType::RtspCamera ? QString::fromUtf8(source.endpoint.c_str()) : info.absoluteFilePath());
@@ -1452,7 +1450,7 @@ void ObsDualMediaTestWindow::refreshCatalogUi() {
         previewWidget->setAttribute(Qt::WA_TransparentForMouseEvents);
         tileLayout->addWidget(previewWidget, 0, Qt::AlignHCenter);
         auto* title = new QLabel(QStringLiteral("#%1  [%2]%3 %4")
-            .arg(source.id)
+            .arg(displaySlot)
             .arg(isProgram ? QStringLiteral("PGM") : catalogSourceBadge(source))
             .arg(isPreview && !isProgram ? QStringLiteral(" PVW") : QString{})
             .arg(sourceName), tile);

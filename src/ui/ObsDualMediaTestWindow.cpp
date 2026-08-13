@@ -199,16 +199,19 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     inputToolbar->addStretch();
     m_addSourceButton = new QPushButton(QStringLiteral("Add Input"), inputBank);
     auto* addMenu = new QMenu(m_addSourceButton);
-    QAction* addMediaAction = addMenu->addAction(QStringLiteral("Media files..."));
+    QAction* addMediaAction = addMenu->addAction(QStringLiteral("Video files..."));
     QAction* addImageAction = addMenu->addAction(QStringLiteral("Image files..."));
     addMenu->addSeparator();
     QAction* addRtspAction = addMenu->addAction(QStringLiteral("Network stream (RTSP)..."));
     m_addSourceButton->setMenu(addMenu);
-    m_removeSourceButton = new QPushButton(QStringLiteral("Remove"), inputBank);
     m_openPlaylistButton = new QPushButton(QStringLiteral("Playlist"), inputBank);
+    auto* typeLabel = new QLabel(QStringLiteral("Type"), inputBank);
+    typeLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
+    auto* sizeLabel = new QLabel(QStringLiteral("Size"), inputBank);
+    sizeLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
     m_catalogThumbnailSize = new QComboBox(inputBank);
     m_catalogThumbnailSize->addItem(QStringLiteral("Small"), 110);
-    m_catalogThumbnailSize->addItem(QStringLiteral("Normal"), 160);
+    m_catalogThumbnailSize->addItem(QStringLiteral("Normal"), 192);
     m_catalogThumbnailSize->addItem(QStringLiteral("Large"), 220);
     m_catalogThumbnailSize->setCurrentIndex(1);
     m_sourceTypeFilter = new QComboBox(inputBank);
@@ -219,9 +222,10 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     m_sourceTypeFilter->addItem(QStringLiteral("RTSP cameras"), static_cast<int>(ObsCatalogSourceType::RtspCamera));
     m_sourceTypeFilter->addItem(QStringLiteral("Blank"), static_cast<int>(ObsCatalogSourceType::ColorBlank));
     inputToolbar->addWidget(m_addSourceButton);
-    inputToolbar->addWidget(m_removeSourceButton);
     inputToolbar->addWidget(m_openPlaylistButton);
+    inputToolbar->addWidget(typeLabel);
     inputToolbar->addWidget(m_sourceTypeFilter);
+    inputToolbar->addWidget(sizeLabel);
     inputToolbar->addWidget(m_catalogThumbnailSize);
     inputBankLayout->addLayout(inputToolbar);
     m_sourceCatalogList = new QListWidget(inputBank);
@@ -248,7 +252,6 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     connect(addMediaAction, &QAction::triggered, this, [this] { addCatalogFiles(-1); });
     connect(addImageAction, &QAction::triggered, this, [this] { addCatalogFiles(static_cast<int>(ObsCatalogSourceType::ImageFile)); });
     connect(addRtspAction, &QAction::triggered, this, &ObsDualMediaTestWindow::addRtspSource);
-    connect(m_removeSourceButton, &QPushButton::clicked, this, [this] { removeCatalogSource(); });
     connect(m_openPlaylistButton, &QPushButton::clicked, this, &ObsDualMediaTestWindow::showPlaylistManager);
     connect(m_catalogThumbnailSize, &QComboBox::currentIndexChanged, this, [this](int) {
         setCatalogThumbnailSize(m_catalogThumbnailSize->currentData().toInt());
@@ -308,6 +311,7 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     connect(m_timer, &QTimer::timeout, this, [this] {
         updatePanel(m_preview, QStringLiteral("PVW"));
         updatePanel(m_program, QStringLiteral("PGM"));
+        rememberProgramSnapshot(captureProgramSnapshot());
         finishFadeIfComplete();
         if (m_playlistMode && !m_fadeActive && !m_playlist->empty() && m_playlist->isAutoNext() && m_program.backend &&
             m_program.backend->hasEnded()) {
@@ -487,14 +491,14 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     panel.resetButton->setFixedSize(30, 24);
     panel.resetButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaSkipBackward));
     panel.resetButton->setToolTip(QStringLiteral("Reset về đầu"));
-    auto* backButton = new QPushButton(group);
-    backButton->setFixedSize(30, 24);
-    backButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaSeekBackward));
-    backButton->setToolTip(QStringLiteral("Lùi 10 giây"));
-    auto* forwardButton = new QPushButton(group);
-    forwardButton->setFixedSize(30, 24);
-    forwardButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaSeekForward));
-    forwardButton->setToolTip(QStringLiteral("Tới 10 giây"));
+    panel.seekBackButton = new QPushButton(group);
+    panel.seekBackButton->setFixedSize(30, 24);
+    panel.seekBackButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaSeekBackward));
+    panel.seekBackButton->setToolTip(QStringLiteral("Lùi 10 giây"));
+    panel.seekForwardButton = new QPushButton(group);
+    panel.seekForwardButton->setFixedSize(30, 24);
+    panel.seekForwardButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaSeekForward));
+    panel.seekForwardButton->setToolTip(QStringLiteral("Tới 10 giây"));
     panel.seekSlider = new QSlider(Qt::Horizontal, group);
     panel.seekSlider->setRange(0, 1000);
     panel.timeLabel = new QLabel(QStringLiteral("00:00 / --:--"), group);
@@ -505,8 +509,8 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     panel.statusLabel = new QLabel(group);
     controls->addWidget(panel.seekSlider, 1);
     controls->addWidget(panel.timeLabel);
-    controls->addWidget(backButton);
-    controls->addWidget(forwardButton);
+    controls->addWidget(panel.seekBackButton);
+    controls->addWidget(panel.seekForwardButton);
     controls->addWidget(panel.loopButton);
     controls->addWidget(panel.resetButton);
     controls->addWidget(panel.playPauseButton);
@@ -516,8 +520,8 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     connect(panel.playPauseButton, &QPushButton::clicked, this, [this, &panel] { togglePanelPlayback(panel); });
     connect(panel.loopButton, &QPushButton::clicked, this, [this, &panel] { togglePanelLoop(panel); });
     connect(panel.resetButton, &QPushButton::clicked, this, [this, &panel] { resetPanel(panel); });
-    connect(backButton, &QPushButton::clicked, this, [this, &panel] { seekPanel(panel, -10000); });
-    connect(forwardButton, &QPushButton::clicked, this, [this, &panel] { seekPanel(panel, 10000); });
+    connect(panel.seekBackButton, &QPushButton::clicked, this, [this, &panel] { seekPanel(panel, -10000); });
+    connect(panel.seekForwardButton, &QPushButton::clicked, this, [this, &panel] { seekPanel(panel, 10000); });
     connect(panel.seekSlider, &QSlider::sliderPressed, this, [&panel] { panel.sliderDragging = true; });
     connect(panel.seekSlider, &QSlider::sliderReleased, this, [this, &panel] {
         panel.sliderDragging = false;
@@ -616,14 +620,19 @@ void ObsDualMediaTestWindow::updateMonitorLayout() {
 void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
     if (!panel.backend || !panel.backend->isOpen()) {
         if (&panel == &m_preview && !m_stagedPreviewPath.empty()) {
-            panel.playPauseButton->setEnabled(true);
-            panel.playPauseButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
-            panel.playPauseButton->setToolTip(QStringLiteral("Phát PVW"));
-            panel.loopButton->setEnabled(true);
-            panel.resetButton->setEnabled(true);
-            panel.seekSlider->setEnabled(m_stagedPreviewDurationMs > 0);
-            panel.timeLabel->setText(formatTimeline(m_stagedPreviewPositionMs, m_stagedPreviewDurationMs));
             const auto source = m_sourceCatalog->find(m_previewSourceId);
+            const bool supportsTransport = source && obsCatalogSourceHasTimeline(source->type);
+            panel.playPauseButton->setEnabled(supportsTransport);
+            panel.loopButton->setEnabled(supportsTransport);
+            panel.resetButton->setEnabled(supportsTransport);
+            panel.seekBackButton->setEnabled(supportsTransport);
+            panel.seekForwardButton->setEnabled(supportsTransport);
+            panel.seekSlider->setEnabled(supportsTransport && m_stagedPreviewDurationMs > 0);
+            panel.playPauseButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+            panel.playPauseButton->setToolTip(supportsTransport ? QStringLiteral("Phát PVW") : QStringLiteral("Ảnh tĩnh"));
+            panel.timeLabel->setText(supportsTransport
+                ? formatTimeline(m_stagedPreviewPositionMs, m_stagedPreviewDurationMs)
+                : QStringLiteral("STILL"));
             const QString name = source ? catalogSourceName(*source) : QString::fromStdWString(m_stagedPreviewPath.filename().wstring());
             panel.sourceLabel->setText(panel.sourceLabel->fontMetrics().elidedText(
                 QStringLiteral("PVW  %1").arg(name), Qt::ElideRight, panel.sourceLabel->width()));
@@ -638,6 +647,8 @@ void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
     panel.playPauseButton->setEnabled(supportsTransport);
     panel.loopButton->setEnabled(supportsTransport);
     panel.resetButton->setEnabled(supportsTransport);
+    panel.seekBackButton->setEnabled(supportsTransport);
+    panel.seekForwardButton->setEnabled(supportsTransport);
     if (!panel.sliderDragging && supportsTransport && duration > 0) panel.seekSlider->setValue(static_cast<int>(position * 1000 / duration));
     const bool isPlaying = panel.backend->state() == ObsPlaybackState::Playing;
     panel.playPauseButton->setIcon(style()->standardIcon(isPlaying ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
@@ -661,7 +672,10 @@ void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
 void ObsDualMediaTestWindow::stagePreviewSource(const ObsCatalogSource& source) {
     if (source.type == ObsCatalogSourceType::VideoFile || source.type == ObsCatalogSourceType::AudioFile ||
         source.type == ObsCatalogSourceType::ImageFile) {
-        stagePreviewAtPosition(source.path, source.id, 0);
+        const PlaybackSnapshot snapshot = previewSnapshotForSource(source);
+        stagePreviewAtPosition(source.path, source.id, snapshot.positionMs);
+        m_stagedPreviewDurationMs = snapshot.durationMs;
+        m_stagedPreviewLoop = snapshot.looping;
         return;
     }
 
@@ -785,6 +799,24 @@ ObsDualMediaTestWindow::PlaybackSnapshot ObsDualMediaTestWindow::captureProgramS
     return snapshot;
 }
 
+ObsDualMediaTestWindow::PlaybackSnapshot ObsDualMediaTestWindow::previewSnapshotForSource(const ObsCatalogSource& source) const {
+    if (source.id == m_programSourceId) {
+        const PlaybackSnapshot liveProgram = captureProgramSnapshot();
+        if (liveProgram.valid) return liveProgram;
+    }
+    if (const auto it = m_lastProgramSnapshots.find(source.id); it != m_lastProgramSnapshots.end()) return it->second;
+
+    PlaybackSnapshot snapshot;
+    snapshot.sourceId = source.id;
+    snapshot.valid = true;
+    return snapshot;
+}
+
+void ObsDualMediaTestWindow::rememberProgramSnapshot(const PlaybackSnapshot& snapshot) {
+    if (!snapshot.valid || snapshot.sourceId == 0) return;
+    m_lastProgramSnapshots[snapshot.sourceId] = snapshot;
+}
+
 void ObsDualMediaTestWindow::stagePreviewSnapshot(const PlaybackSnapshot& snapshot) {
     if (!snapshot.valid) {
         clearPreviewSource();
@@ -850,6 +882,7 @@ void ObsDualMediaTestWindow::clearPreviewSource() {
 }
 
 void ObsDualMediaTestWindow::clearProgramSource() {
+    rememberProgramSnapshot(captureProgramSnapshot());
     destroyDisplay(m_program);
     if (m_program.backend) {
         m_program.backend->resetRenderSource();
@@ -912,6 +945,7 @@ bool ObsDualMediaTestWindow::promotePreviewToProgram(const char* operation) {
     }
 
     const bool shouldSwap = std::string_view(operation) == "CUT";
+    rememberProgramSnapshot(outgoing);
 
     // There is deliberately one handoff path for static and playing PVW.  A
     // previous optimization swapped runtime objects only when PVW happened to
@@ -964,6 +998,7 @@ bool ObsDualMediaTestWindow::fadePreviewToProgram() {
         return false;
     }
     const uint32_t duration = static_cast<uint32_t>(m_fadeDuration->currentData().toUInt());
+    rememberProgramSnapshot(outgoingSnapshot);
 
     auto incoming = std::make_unique<ObsPlaybackBackend>(m_context);
     // Prepare incoming media silently, then transfer the single WASAPI monitor atomically at FADE start.
@@ -1302,6 +1337,7 @@ void ObsDualMediaTestWindow::removeCatalogSource(uint64_t sourceId) {
         if (m_playlist->sourceIdAt(index - 1) == sourceId) m_playlist->removeAt(index - 1);
     if (!m_sourceCatalog->remove(sourceId)) return;
     m_sourceThumbnails.erase(sourceId);
+    m_lastProgramSnapshots.erase(sourceId);
     if (clearsPreview) {
         if (replacementPreviewId == 0) {
             const auto blank = std::find_if(m_sourceCatalog->sources().begin(), m_sourceCatalog->sources().end(),
@@ -1365,6 +1401,7 @@ bool ObsDualMediaTestWindow::activatePlaylistProgram(const char* reason) {
     if (!m_playlistMode || m_playlist->empty() || m_fadeActive) return false;
     const auto source = m_sourceCatalog->find(m_playlist->currentSourceId());
     if (!source) { stopPlaylist(); return false; }
+    rememberProgramSnapshot(captureProgramSnapshot());
     m_program.backend->resetRenderSource();
     m_program.backend->close();
     m_program.backend->setAudioOutputEnabled(true);

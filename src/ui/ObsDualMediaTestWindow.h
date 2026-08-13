@@ -69,6 +69,8 @@ private:
         QPushButton* playPauseButton{nullptr};
         QPushButton* loopButton{nullptr};
         QPushButton* resetButton{nullptr};
+        QPushButton* seekBackButton{nullptr};
+        QPushButton* seekForwardButton{nullptr};
         obs_display_t* display{nullptr};
         obs_source_t* fadeTransition{nullptr};
         std::atomic_bool fadeVideoCompleted{false};
@@ -112,6 +114,8 @@ private:
     bool openStagedPreview(bool play);
     PlaybackSnapshot capturePreviewSnapshot() const;
     PlaybackSnapshot captureProgramSnapshot() const;
+    PlaybackSnapshot previewSnapshotForSource(const ObsCatalogSource& source) const;
+    void rememberProgramSnapshot(const PlaybackSnapshot& snapshot);
     void stagePreviewSnapshot(const PlaybackSnapshot& snapshot);
     void clearStagedPreviewMetadata();
     void clearPreviewSource();
@@ -159,7 +163,6 @@ private:
     QPushButton* m_fadeButton{nullptr};
     QPushButton* m_fullscreenButton{nullptr};
     QPushButton* m_addSourceButton{nullptr};
-    QPushButton* m_removeSourceButton{nullptr};
     QPushButton* m_openPlaylistButton{nullptr};
     QComboBox* m_catalogThumbnailSize{nullptr};
     QComboBox* m_sourceTypeFilter{nullptr};
@@ -176,6 +179,7 @@ private:
     QWidget* m_inputBank{nullptr};
     std::unordered_map<uint64_t, QPixmap> m_sourceThumbnails;
     std::unordered_map<uint64_t, QLabel*> m_catalogThumbnailLabels;
+    std::unordered_map<uint64_t, PlaybackSnapshot> m_lastProgramSnapshots;
     std::filesystem::path m_stagedPreviewPath;
     uint64_t m_stagedPreviewSourceId{0};
     uint64_t m_previewSourceId{0};

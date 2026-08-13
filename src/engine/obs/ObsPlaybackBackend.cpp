@@ -11,6 +11,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cmath>
 #include <QString>
 
 namespace {
@@ -137,6 +138,7 @@ bool ObsPlaybackBackend::openConfiguredSource(const char* sourceType, obs_data_t
     // before attaching, otherwise media_started can be emitted before a
     // Preview source has a chance to apply its initial pause request.
     connectMediaSignals();
+    connectAudioCapture();
     LOG_INFO("OBS media: Attaching source to view.");
     obs_view_set_source(m_view, 0, m_source);
     // The active reference keeps ffmpeg_source decoding the first PVW frame.
@@ -164,6 +166,7 @@ void ObsPlaybackBackend::close() {
     if (!m_source && !m_view) return;
     LOG_INFO("OBS media: Destroying source for '{}'.", toUtf8Path(m_path));
     setAudioMonitoring(false);
+    disconnectAudioCapture();
     disconnectMediaSignals();
     if (m_source && m_sourceActive) {
         obs_source_dec_active(m_source);
@@ -185,6 +188,8 @@ void ObsPlaybackBackend::close() {
     m_mediaEnded.store(false);
     m_pendingSeekMs.store(-1);
     m_pendingSeekAttempts.store(0);
+    m_leftAudioPeak.store(0.0f);
+    m_rightAudioPeak.store(0.0f);
     m_supportsTransport = true;
     m_supportsAudio = true;
     m_liveInput = false;
@@ -356,6 +361,18 @@ void ObsPlaybackBackend::setAudioOutputEnabled(bool enabled) {
     }
 }
 
+void ObsPlaybackBackend::setVolume(float volume) {
+    if (!m_source || !m_supportsAudio) return;
+    obs_source_set_volume(m_source, std::clamp(volume, 0.0f, 1.0f));
+}
+
+float ObsPlaybackBackend::volume() const {
+    return m_source && m_supportsAudio ? obs_source_get_volume(m_source) : 0.0f;
+}
+
+float ObsPlaybackBackend::takeLeftAudioPeak() { return m_leftAudioPeak.exchange(0.0f); }
+float ObsPlaybackBackend::takeRightAudioPeak() { return m_rightAudioPeak.exchange(0.0f); }
+
 void ObsPlaybackBackend::setRenderSource(obs_source_t* source) {
     if (m_view) obs_view_set_source(m_view, 0, source);
 }
@@ -403,6 +420,23 @@ void ObsPlaybackBackend::onMediaEnded(void* data, calldata_t*) {
     LOG_INFO("OBS media: Source signalled media_ended. looping={}", backend->m_looping);
 }
 
+void ObsPlaybackBackend::onAudioCaptured(void* data, obs_source_t*, const audio_data* audioData, bool muted) {
+    auto* backend = static_cast<ObsPlaybackBackend*>(data);
+    if (!backend || !audioData || muted || !audioData->data[0]) return;
+
+    const auto* left = reinterpret_cast<const float*>(audioData->data[0]);
+    const auto* right = audioData->data[1] ? reinterpret_cast<const float*>(audioData->data[1]) : left;
+    const uint32_t frames = std::min<uint32_t>(audioData->frames, 2048);
+    float leftPeak = 0.0f;
+    float rightPeak = 0.0f;
+    for (uint32_t index = 0; index < frames; ++index) {
+        leftPeak = std::max(leftPeak, std::abs(left[index]));
+        rightPeak = std::max(rightPeak, std::abs(right[index]));
+    }
+    backend->m_leftAudioPeak.store(std::clamp(leftPeak, 0.0f, 1.0f));
+    backend->m_rightAudioPeak.store(std::clamp(rightPeak, 0.0f, 1.0f));
+}
+
 void ObsPlaybackBackend::connectMediaSignals() {
     if (!m_source || m_mediaSignalsConnected) return;
     signal_handler_t* signalHandler = obs_source_get_signal_handler(m_source);
@@ -417,6 +451,18 @@ void ObsPlaybackBackend::disconnectMediaSignals() {
     signal_handler_disconnect(signalHandler, "media_started", onMediaStarted, this);
     signal_handler_disconnect(signalHandler, "media_ended", onMediaEnded, this);
     m_mediaSignalsConnected = false;
+}
+
+void ObsPlaybackBackend::connectAudioCapture() {
+    if (!m_source || m_audioCaptureConnected || !m_supportsAudio) return;
+    obs_source_add_audio_capture_callback(m_source, onAudioCaptured, this);
+    m_audioCaptureConnected = true;
+}
+
+void ObsPlaybackBackend::disconnectAudioCapture() {
+    if (!m_source || !m_audioCaptureConnected) return;
+    obs_source_remove_audio_capture_callback(m_source, onAudioCaptured, this);
+    m_audioCaptureConnected = false;
 }
 
 ObsPlaybackState ObsPlaybackBackend::mapState(int obsState) {

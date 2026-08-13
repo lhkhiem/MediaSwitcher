@@ -37,6 +37,7 @@ extern "C" {
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QResizeEvent>
 #include <QSlider>
 #include <QSizePolicy>
@@ -133,7 +134,11 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
         "QComboBox { background: #27313a; color: #eff3f6; border: 1px solid #52616e; border-radius: 2px; min-height: 27px; padding-left: 7px; }"
         "QSlider::groove:horizontal { height: 4px; background: #0e1216; border: 1px solid #4d5962; }"
         "QSlider::sub-page:horizontal { background: #2389b8; }"
-        "QSlider::handle:horizontal { width: 9px; margin: -5px 0; background: #d6e0e6; border: 1px solid #8b9aa5; }"));
+        "QSlider::handle:horizontal { width: 9px; margin: -5px 0; background: #d6e0e6; border: 1px solid #8b9aa5; }"
+        "QSlider::groove:vertical { width: 4px; background: #10161b; border: 0; border-radius: 2px; }"
+        "QSlider::sub-page:vertical { background: #10161b; border-radius: 2px; }"
+        "QSlider::add-page:vertical { background: #18b9d7; border-radius: 2px; }"
+        "QSlider::handle:vertical { height: 7px; margin: 0 -5px; background: #74e8ef; border: 1px solid #c5f7f9; border-radius: 3px; }"));
 
     auto* rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(8, 8, 8, 8);
@@ -143,13 +148,15 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     auto* switcherLayout = new QHBoxLayout(m_switcherArea);
     switcherLayout->setContentsMargins(0, 0, 0, 0);
     switcherLayout->setSpacing(8);
-    switcherLayout->addWidget(createPanel(m_preview, QStringLiteral("PREVIEW (PVW) - PAUSED"), QStringLiteral("#1d4552")), 1);
+    QWidget* previewPanel = createPanel(m_preview, QStringLiteral("PREVIEW (PVW) - PAUSED"), QStringLiteral("#1d4552"));
+    QWidget* programPanel = createPanel(m_program, QStringLiteral("PROGRAM (PGM) - LIVE AUDIO"), QStringLiteral("#482a32"));
+    switcherLayout->addWidget(previewPanel, 1);
     auto* transitionWidget = new QWidget(this);
     transitionWidget->setFixedWidth(116);
     transitionWidget->setObjectName(QStringLiteral("transitionRail"));
     transitionWidget->setStyleSheet(QStringLiteral(
         "#transitionRail { background: #20272e; border-left: 1px solid #3c4953; border-right: 1px solid #3c4953; }"
-        "QPushButton { min-height: 34px; font-weight: bold; }"));
+        "QPushButton { min-height: 28px; font-weight: bold; }"));
     auto* transitionControls = new QVBoxLayout(transitionWidget);
     transitionControls->setContentsMargins(5, 12, 5, 12);
     transitionControls->setSpacing(6);
@@ -166,21 +173,62 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     m_quickPlayButton->setText(QStringLiteral("QUICK PLAY"));
     m_cutButton->setText(QStringLiteral("CUT"));
     m_fadeButton->setText(QStringLiteral("FADE"));
+    m_fullscreenButton = new QPushButton(QStringLiteral("FULL SCREEN"), transitionWidget);
+    m_fullscreenButton->setToolTip(QStringLiteral("Mở output PGM toàn màn hình trên màn hình thứ hai"));
+    transitionControls->addWidget(m_fullscreenButton);
+    transitionControls->addSpacing(4);
     transitionControls->addWidget(m_quickPlayButton);
     transitionControls->addWidget(m_cutButton);
     transitionControls->addWidget(m_fadeButton);
     transitionControls->addWidget(m_fadeDuration);
-    transitionControls->addSpacing(14);
-    m_fullscreenButton = new QPushButton(QStringLiteral("FULL SCREEN"), transitionWidget);
-    m_fullscreenButton->setToolTip(QStringLiteral("Mở output PGM toàn màn hình trên màn hình thứ hai"));
-    transitionControls->addWidget(m_fullscreenButton);
-    auto* transitionHint = new QLabel(QStringLiteral("PVW -> PGM"), transitionWidget);
-    transitionHint->setAlignment(Qt::AlignCenter);
-    transitionHint->setStyleSheet(QStringLiteral("color: #9aa9b4; font-size: 10px; border: 0;"));
-    transitionControls->addWidget(transitionHint);
-    transitionControls->addStretch();
+
+    auto* audioControls = new QHBoxLayout();
+    audioControls->setContentsMargins(2, 6, 2, 0);
+    audioControls->setSpacing(3);
+    const auto addAudioStrip = [transitionWidget, audioControls](Panel& panel) {
+        auto* strip = new QWidget(transitionWidget);
+        strip->setObjectName(QStringLiteral("audioStrip"));
+        strip->setStyleSheet(QStringLiteral(
+            "#audioStrip { background: transparent; border: 0; }"));
+        auto* stripLayout = new QVBoxLayout(strip);
+        stripLayout->setContentsMargins(0, 0, 0, 0);
+        stripLayout->setSpacing(2);
+
+        auto* channels = new QHBoxLayout();
+        channels->setContentsMargins(0, 0, 0, 0);
+        channels->setSpacing(4);
+        auto* faderColumn = new QVBoxLayout();
+        faderColumn->setContentsMargins(0, 0, 0, 0);
+        faderColumn->setSpacing(3);
+        auto* meterColumn = new QVBoxLayout();
+        meterColumn->setContentsMargins(0, 0, 0, 0);
+        meterColumn->setSpacing(3);
+        panel.volumeSlider->setParent(strip);
+        panel.volumeSlider->setOrientation(Qt::Vertical);
+        panel.volumeSlider->setFixedWidth(16);
+        panel.volumeSlider->setMinimumHeight(90);
+        panel.volumeSlider->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+        panel.leftAudioMeter->setParent(strip);
+        panel.leftAudioMeter->setFixedWidth(10);
+        panel.leftAudioMeter->setMinimumHeight(0);
+        panel.leftAudioMeter->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+        panel.rightAudioMeter->setParent(strip);
+        panel.rightAudioMeter->hide();
+        faderColumn->addWidget(panel.volumeSlider, 1, Qt::AlignHCenter);
+        panel.muteButton->setParent(strip);
+        faderColumn->addWidget(panel.muteButton, 0, Qt::AlignHCenter);
+        channels->addLayout(faderColumn);
+        meterColumn->addWidget(panel.leftAudioMeter, 1, Qt::AlignHCenter);
+        meterColumn->addSpacing(panel.muteButton->height() + 3);
+        channels->addLayout(meterColumn);
+        stripLayout->addLayout(channels, 1);
+        audioControls->addWidget(strip, 1);
+    };
+    addAudioStrip(m_preview);
+    addAudioStrip(m_program);
+    transitionControls->addLayout(audioControls, 1);
     switcherLayout->addWidget(transitionWidget);
-    switcherLayout->addWidget(createPanel(m_program, QStringLiteral("PROGRAM (PGM) - LIVE AUDIO"), QStringLiteral("#482a32")), 1);
+    switcherLayout->addWidget(programPanel, 1);
     rootLayout->addWidget(m_switcherArea);
 
     auto* inputBank = new QWidget(this);
@@ -476,27 +524,34 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     panel.stagedFrameLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     layout->addWidget(panel.videoContainer, 1);
 
-    auto* controls = new QHBoxLayout();
+    auto* controlsWidget = new QWidget(group);
+    controlsWidget->setObjectName(QStringLiteral("monitorControls"));
+    controlsWidget->setAttribute(Qt::WA_NativeWindow);
+    controlsWidget->setAttribute(Qt::WA_AlwaysStackOnTop);
+    controlsWidget->setFixedHeight(42);
+    controlsWidget->setStyleSheet(QStringLiteral("#monitorControls { background: #11161b; border: 0; }"));
+    auto* controls = new QHBoxLayout(controlsWidget);
+    controls->setContentsMargins(0, 5, 0, 5);
     controls->setSpacing(4);
     panel.playPauseButton = new QPushButton(group);
-    panel.playPauseButton->setFixedSize(30, 24);
+    panel.playPauseButton->setFixedSize(32, 30);
     panel.playPauseButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaPlay));
     panel.playPauseButton->setToolTip(QStringLiteral("Phát PVW/PGM"));
     panel.loopButton = new QPushButton(group);
-    panel.loopButton->setFixedSize(30, 24);
+    panel.loopButton->setFixedSize(32, 30);
     panel.loopButton->setIcon(group->style()->standardIcon(QStyle::SP_BrowserReload));
     panel.loopButton->setToolTip(QStringLiteral("Bật/tắt lặp lại"));
     panel.loopButton->setProperty("loopActive", false);
     panel.resetButton = new QPushButton(group);
-    panel.resetButton->setFixedSize(30, 24);
+    panel.resetButton->setFixedSize(32, 30);
     panel.resetButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaSkipBackward));
     panel.resetButton->setToolTip(QStringLiteral("Reset về đầu"));
     panel.seekBackButton = new QPushButton(group);
-    panel.seekBackButton->setFixedSize(30, 24);
+    panel.seekBackButton->setFixedSize(32, 30);
     panel.seekBackButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaSeekBackward));
     panel.seekBackButton->setToolTip(QStringLiteral("Lùi 10 giây"));
     panel.seekForwardButton = new QPushButton(group);
-    panel.seekForwardButton->setFixedSize(30, 24);
+    panel.seekForwardButton->setFixedSize(32, 30);
     panel.seekForwardButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaSeekForward));
     panel.seekForwardButton->setToolTip(QStringLiteral("Tới 10 giây"));
     panel.seekSlider = new QSlider(Qt::Horizontal, group);
@@ -507,6 +562,33 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     panel.timeLabel->setFixedWidth(114);
     panel.timeLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     panel.statusLabel = new QLabel(group);
+    panel.volumeSlider = new QSlider(Qt::Horizontal, group);
+    panel.volumeSlider->setRange(0, 100);
+    panel.volumeSlider->setValue(100);
+    panel.volumeSlider->setFixedWidth(58);
+    panel.volumeSlider->setToolTip(QStringLiteral("Âm lượng"));
+    panel.muteButton = new QPushButton(group);
+    panel.muteButton->setCheckable(true);
+    panel.muteButton->setFixedSize(24, 22);
+    panel.muteButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaVolume));
+    panel.muteButton->setToolTip(QStringLiteral("Tắt tiếng"));
+    panel.muteButton->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #202b33; border: 0; border-radius: 3px; padding: 1px; }"
+        "QPushButton:hover { background: #29414c; }"
+        "QPushButton:checked { background: #642d3a; }"));
+    panel.leftAudioMeter = new QProgressBar(group);
+    panel.rightAudioMeter = new QProgressBar(group);
+    for (QProgressBar* meter : {panel.leftAudioMeter, panel.rightAudioMeter}) {
+        meter->setRange(0, 100);
+        meter->setValue(0);
+        meter->setTextVisible(false);
+        meter->setOrientation(Qt::Vertical);
+        meter->setStyleSheet(QStringLiteral(
+            "QProgressBar { border: 0; border-radius: 4px; background: #10161b; }"
+            "QProgressBar::chunk { background: #31d9b1; border-radius: 3px; }"));
+    }
+    panel.leftAudioMeter->setToolTip(QStringLiteral("Kênh trái"));
+    panel.rightAudioMeter->setToolTip(QStringLiteral("Kênh phải"));
     controls->addWidget(panel.seekSlider, 1);
     controls->addWidget(panel.timeLabel);
     controls->addWidget(panel.seekBackButton);
@@ -515,13 +597,23 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     controls->addWidget(panel.resetButton);
     controls->addWidget(panel.playPauseButton);
     panel.statusLabel->hide();
-    layout->addLayout(controls);
+    layout->addWidget(controlsWidget);
 
     connect(panel.playPauseButton, &QPushButton::clicked, this, [this, &panel] { togglePanelPlayback(panel); });
     connect(panel.loopButton, &QPushButton::clicked, this, [this, &panel] { togglePanelLoop(panel); });
     connect(panel.resetButton, &QPushButton::clicked, this, [this, &panel] { resetPanel(panel); });
     connect(panel.seekBackButton, &QPushButton::clicked, this, [this, &panel] { seekPanel(panel, -10000); });
     connect(panel.seekForwardButton, &QPushButton::clicked, this, [this, &panel] { seekPanel(panel, 10000); });
+    connect(panel.volumeSlider, &QSlider::valueChanged, this, [&panel](int value) {
+        panel.volume = static_cast<float>(value) / 100.0f;
+        if (panel.backend && panel.backend->isOpen()) panel.backend->setVolume(panel.audioMuted ? 0.0f : panel.volume);
+    });
+    connect(panel.muteButton, &QPushButton::toggled, this, [this, &panel](bool muted) {
+        panel.audioMuted = muted;
+        panel.muteButton->setIcon(style()->standardIcon(muted ? QStyle::SP_MediaVolumeMuted : QStyle::SP_MediaVolume));
+        panel.muteButton->setToolTip(muted ? QStringLiteral("Bật tiếng") : QStringLiteral("Tắt tiếng"));
+        if (panel.backend && panel.backend->isOpen()) panel.backend->setVolume(muted ? 0.0f : panel.volume);
+    });
     connect(panel.seekSlider, &QSlider::sliderPressed, this, [&panel] { panel.sliderDragging = true; });
     connect(panel.seekSlider, &QSlider::sliderReleased, this, [this, &panel] {
         panel.sliderDragging = false;
@@ -605,7 +697,9 @@ void ObsDualMediaTestWindow::updateMonitorLayout() {
 
     constexpr int transitionRailWidth = 116;
     constexpr int horizontalSpacing = 8;
-    constexpr int panelChromeHeight = 70;
+    // Header, margins, gaps and the dedicated native transport bar.  The
+    // extra headroom keeps a D3D11 child surface from overlapping controls.
+    constexpr int panelChromeHeight = 94;
     const int usableWidth = std::max(0, m_switcherArea->width() - transitionRailWidth - horizontalSpacing * 2);
     const int panelWidth = usableWidth / 2;
     if (panelWidth <= 0) return;
@@ -622,11 +716,17 @@ void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
         if (&panel == &m_preview && !m_stagedPreviewPath.empty()) {
             const auto source = m_sourceCatalog->find(m_previewSourceId);
             const bool supportsTransport = source && obsCatalogSourceHasTimeline(source->type);
+            const bool supportsAudio = source && source->type != ObsCatalogSourceType::ImageFile &&
+                source->type != ObsCatalogSourceType::ColorBlank;
             panel.playPauseButton->setEnabled(supportsTransport);
             panel.loopButton->setEnabled(supportsTransport);
             panel.resetButton->setEnabled(supportsTransport);
             panel.seekBackButton->setEnabled(supportsTransport);
             panel.seekForwardButton->setEnabled(supportsTransport);
+            panel.volumeSlider->setEnabled(supportsAudio);
+            panel.muteButton->setEnabled(supportsAudio);
+            panel.leftAudioMeter->setValue(0);
+            panel.rightAudioMeter->setValue(0);
             panel.seekSlider->setEnabled(supportsTransport && m_stagedPreviewDurationMs > 0);
             panel.playPauseButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
             panel.playPauseButton->setToolTip(supportsTransport ? QStringLiteral("Phát PVW") : QStringLiteral("Ảnh tĩnh"));
@@ -641,6 +741,7 @@ void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
     }
     panel.backend->enforcePendingPause();
     const bool supportsTransport = panel.backend->supportsTransport();
+    const bool supportsAudio = panel.backend->supportsAudio();
     const int64_t position = panel.backend->positionMs();
     const int64_t duration = panel.backend->durationMs();
     panel.seekSlider->setEnabled(supportsTransport && duration > 0);
@@ -649,6 +750,22 @@ void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
     panel.resetButton->setEnabled(supportsTransport);
     panel.seekBackButton->setEnabled(supportsTransport);
     panel.seekForwardButton->setEnabled(supportsTransport);
+    panel.volumeSlider->setEnabled(supportsAudio);
+    panel.muteButton->setEnabled(supportsAudio);
+    if (supportsAudio) {
+        panel.backend->setVolume(panel.audioMuted ? 0.0f : panel.volume);
+        const float leftPeak = panel.backend->takeLeftAudioPeak();
+        const float rightPeak = panel.backend->takeRightAudioPeak();
+        panel.leftMeterLevel = std::max(leftPeak, panel.leftMeterLevel * 0.72f);
+        panel.rightMeterLevel = std::max(rightPeak, panel.rightMeterLevel * 0.72f);
+        panel.leftAudioMeter->setValue(static_cast<int>(std::clamp(std::max(panel.leftMeterLevel, panel.rightMeterLevel), 0.0f, 1.0f) * 100.0f));
+        panel.rightAudioMeter->setValue(static_cast<int>(std::clamp(panel.rightMeterLevel, 0.0f, 1.0f) * 100.0f));
+    } else {
+        panel.leftMeterLevel = 0.0f;
+        panel.rightMeterLevel = 0.0f;
+        panel.leftAudioMeter->setValue(0);
+        panel.rightAudioMeter->setValue(0);
+    }
     if (!panel.sliderDragging && supportsTransport && duration > 0) panel.seekSlider->setValue(static_cast<int>(position * 1000 / duration));
     const bool isPlaying = panel.backend->state() == ObsPlaybackState::Playing;
     panel.playPauseButton->setIcon(style()->standardIcon(isPlaying ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));

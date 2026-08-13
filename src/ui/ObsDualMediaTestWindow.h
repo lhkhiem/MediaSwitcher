@@ -16,6 +16,7 @@ class QCheckBox;
 class QListWidget;
 class QDialog;
 class QPushButton;
+class QProgressBar;
 class QSlider;
 class QStackedLayout;
 class QTimer;
@@ -71,6 +72,10 @@ private:
         QPushButton* resetButton{nullptr};
         QPushButton* seekBackButton{nullptr};
         QPushButton* seekForwardButton{nullptr};
+        QSlider* volumeSlider{nullptr};
+        QPushButton* muteButton{nullptr};
+        QProgressBar* leftAudioMeter{nullptr};
+        QProgressBar* rightAudioMeter{nullptr};
         obs_display_t* display{nullptr};
         obs_source_t* fadeTransition{nullptr};
         std::atomic_bool fadeVideoCompleted{false};
@@ -82,6 +87,10 @@ private:
         uint32_t thumbnailFrameCounter{0};
         std::atomic_bool thumbnailFrameDelivered{false};
         bool sliderDragging{false};
+        bool audioMuted{false};
+        float volume{1.0f};
+        float leftMeterLevel{0.0f};
+        float rightMeterLevel{0.0f};
     };
 
     // A cue is the operator-visible PVW state.  It exists independently from

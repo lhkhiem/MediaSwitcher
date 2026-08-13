@@ -1,0 +1,12 @@
+[2026-08-13 20:29:34.092] [info] [2564] Logger initialized successfully.
+[2026-08-13 20:29:34.093] [info] [2564] Starting MediaSwitcher...
+[2026-08-13 20:29:34.093] [info] [2564] Initializing workspace at: workspace/
+[2026-08-13 20:29:34.118] [info] [2564] Startup mode: OBS pause smoke test
+[2026-08-13 20:29:34.118] [info] [2564] OBS: Validated libobs data directory 'D:\PROJECT\MyProjects\MediaSwitcher\build-obs\obs-runtime-stage\data\libobs'.
+[2026-08-13 20:29:34.118] [info] [2564] OBS: Runtime root: 'D:\PROJECT\MyProjects\MediaSwitcher\build-obs\obs-runtime-stage\'.
+[2026-08-13 20:29:34.118] [info] [2564] OBS: Starting libobs with graphics backend libobs-d3d11.
+[2026-08-13 20:29:34.123] [info] [2564] OBS: libobs startup succeeded. Version: 32.1.2.
+[2026-08-13 20:29:34.267] [error] [2564] OBS: obs_reset_video failed with code -1.
+[2026-08-13 20:29:34.267] [info] [2564] OBS: Shutting down libobs after releasing 0 loaded module reference(s).
+[2026-08-13 20:29:34.267] [info] [2564] OBS: libobs shutdown completed.
+[2026-08-13 20:29:34.267] [error] [2564] OBS pause smoke test could not initialize OBS.

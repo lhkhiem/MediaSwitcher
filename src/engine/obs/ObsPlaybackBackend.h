@@ -6,6 +6,7 @@
 #include <string>
 
 class ObsContext;
+struct ObsCatalogSource;
 struct obs_source;
 struct obs_view;
 struct calldata;
@@ -25,6 +26,7 @@ public:
     ObsPlaybackBackend& operator=(const ObsPlaybackBackend&) = delete;
 
     bool open(const std::filesystem::path& path, bool startPaused = false);
+    bool open(const ObsCatalogSource& source, bool startPaused = false);
     void close();
     void play();
     void pause();
@@ -36,6 +38,8 @@ public:
     ObsPlaybackState state() const;
     bool isAvailable() const;
     bool isOpen() const;
+    bool supportsTransport() const { return m_supportsTransport; }
+    bool isLiveInput() const { return m_liveInput; }
     const std::filesystem::path& mediaPath() const { return m_path; }
     void setLooping(bool enabled);
     bool isLooping() const { return m_looping; }
@@ -53,6 +57,8 @@ private:
     static void onMediaStarted(void* data, calldata_t* calldata);
     static void onMediaEnded(void* data, calldata_t* calldata);
     bool setAudioMonitoring(bool enabled);
+    bool openConfiguredSource(const char* sourceType, struct obs_data* settings, const std::filesystem::path& reference, bool startPaused,
+                              bool supportsTransport, bool supportsAudio, bool liveInput);
     void connectMediaSignals();
     void disconnectMediaSignals();
     void enforcePendingSeek();
@@ -66,6 +72,9 @@ private:
     bool m_audioMonitoringEnabled{false};
     bool m_sourceActive{false};
     bool m_mediaSignalsConnected{false};
+    bool m_supportsTransport{true};
+    bool m_supportsAudio{true};
+    bool m_liveInput{false};
     std::atomic_bool m_pauseRequested{false};
     std::atomic_bool m_mediaEnded{false};
     std::atomic_int64_t m_pendingSeekMs{-1};

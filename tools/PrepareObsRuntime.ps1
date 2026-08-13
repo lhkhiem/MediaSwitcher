@@ -51,8 +51,10 @@ foreach ($file in $binFiles) {
 }
 Copy-Item -LiteralPath "$artifactRoot\obs-plugins\64bit\obs-ffmpeg.dll" -Destination "$RuntimeRoot\obs-plugins\64bit\obs-ffmpeg.dll"
 Copy-Item -LiteralPath "$artifactRoot\obs-plugins\64bit\obs-transitions.dll" -Destination "$RuntimeRoot\obs-plugins\64bit\obs-transitions.dll"
+Copy-Item -LiteralPath "$artifactRoot\obs-plugins\64bit\image-source.dll" -Destination "$RuntimeRoot\obs-plugins\64bit\image-source.dll"
 Copy-Item -LiteralPath "$artifactRoot\data\libobs" -Destination "$RuntimeRoot\data" -Recurse
 Copy-Item -LiteralPath "$artifactRoot\data\obs-plugins\obs-ffmpeg" -Destination "$RuntimeRoot\data\obs-plugins\obs-ffmpeg" -Recurse
+Copy-Item -LiteralPath "$artifactRoot\data\obs-plugins\image-source" -Destination "$RuntimeRoot\data\obs-plugins\image-source" -Recurse
 New-Item -ItemType Directory -Path "$RuntimeRoot\data\obs-plugins\obs-transitions" | Out-Null
 Copy-Item -LiteralPath "$artifactRoot\data\obs-plugins\obs-transitions\fade_transition.effect" -Destination "$RuntimeRoot\data\obs-plugins\obs-transitions\fade_transition.effect"
 Get-ChildItem -LiteralPath "$sourceTree\libobs" -Force | Copy-Item -Destination "$RuntimeRoot\include" -Recurse
@@ -106,7 +108,7 @@ if ($LASTEXITCODE -ne 0) { throw "lib.exe failed with exit code $LASTEXITCODE." 
     runtimeSha256 = $runtimeHash
     sourceArtifact = "obs-studio-$version source tag"
     sourceSha256 = $sourceHash
-    modules = @('obs-ffmpeg', 'obs-transitions')
+    modules = @('obs-ffmpeg', 'obs-transitions', 'image-source')
     graphicsBackend = 'libobs-d3d11'
     importLibrary = 'Generated from matching obs.dll export table'
 } | ConvertTo-Json | Set-Content -LiteralPath "$RuntimeRoot\runtime-manifest.json" -Encoding utf8

@@ -1,6 +1,7 @@
 #include "ObsPlaybackBackend.h"
 
 #include "ObsContext.h"
+#include "ObsSourceCatalog.h"
 #include "common/logger/Logger.h"
 
 extern "C" {
@@ -25,12 +26,6 @@ ObsPlaybackBackend::ObsPlaybackBackend(ObsContext& context) : m_context(context)
 ObsPlaybackBackend::~ObsPlaybackBackend() { close(); }
 
 bool ObsPlaybackBackend::open(const std::filesystem::path& path, bool startPaused) {
-    close();
-    m_pauseRequested.store(startPaused);
-    if (!m_context.isInitialized()) {
-        LOG_ERROR("OBS media: Cannot open source because ObsContext is not initialized.");
-        return false;
-    }
     if (!std::filesystem::is_regular_file(path)) {
         LOG_ERROR("OBS media: File does not exist or is not a regular file: '{}'.", toUtf8Path(path));
         return false;
@@ -50,12 +45,83 @@ bool ObsPlaybackBackend::open(const std::filesystem::path& path, bool startPause
     // paused intent before ffmpeg_source receives its first start action.
     obs_data_set_bool(settings, "restart_on_activate", true);
     obs_data_set_bool(settings, "clear_on_media_end", true);
+    return openConfiguredSource(kSourceType, settings, absolutePath, startPaused, true, true, false);
+}
 
-    LOG_INFO("OBS media: Creating ffmpeg_source with UTF-8 path.");
-    m_source = obs_source_create(kSourceType, kSourceName, settings, nullptr);
+bool ObsPlaybackBackend::open(const ObsCatalogSource& source, bool startPaused) {
+    if (source.type == ObsCatalogSourceType::VideoFile || source.type == ObsCatalogSourceType::AudioFile) {
+        return open(source.path, startPaused);
+    }
+
+    if (!m_context.isInitialized()) {
+        LOG_ERROR("OBS media: Cannot open source because ObsContext is not initialized.");
+        return false;
+    }
+
+    obs_data_t* settings = obs_data_create();
+    if (!settings) {
+        LOG_ERROR("OBS media: Failed to allocate source settings.");
+        return false;
+    }
+
+    if (source.type == ObsCatalogSourceType::ImageFile) {
+        if (!std::filesystem::is_regular_file(source.path)) {
+            LOG_ERROR("OBS image: File does not exist or is not a regular file: '{}'.", toUtf8Path(source.path));
+            obs_data_release(settings);
+            return false;
+        }
+        const auto absolutePath = std::filesystem::absolute(source.path);
+        const QByteArray utf8Path = QString::fromStdWString(absolutePath.wstring()).toUtf8();
+        obs_data_set_string(settings, "file", utf8Path.constData());
+        obs_data_set_bool(settings, "unload", false);
+        obs_data_set_bool(settings, "linear_alpha", false);
+        return openConfiguredSource("image_source", settings, absolutePath, false, false, false, false);
+    }
+
+    if (source.type == ObsCatalogSourceType::RtspCamera) {
+        if (source.endpoint.empty()) {
+            LOG_ERROR("OBS RTSP: Refusing to open an empty endpoint.");
+            obs_data_release(settings);
+            return false;
+        }
+        obs_data_set_bool(settings, "is_local_file", false);
+        obs_data_set_string(settings, "input", source.endpoint.c_str());
+        obs_data_set_int(settings, "buffering_mb", 2);
+        obs_data_set_int(settings, "reconnect_delay_sec", 3);
+        obs_data_set_bool(settings, "hw_decode", true);
+        obs_data_set_bool(settings, "clear_on_media_end", true);
+        return openConfiguredSource(kSourceType, settings, std::filesystem::path(source.endpoint), false, false, true, true);
+    }
+
+    if (source.type == ObsCatalogSourceType::ColorBlank) {
+        obs_data_set_int(settings, "color", 0x000000FF);
+        obs_data_set_int(settings, "width", 1920);
+        obs_data_set_int(settings, "height", 1080);
+        return openConfiguredSource("color_source", settings, {}, false, false, false, false);
+    }
+
+    obs_data_release(settings);
+    LOG_ERROR("OBS media: Unsupported source type.");
+    return false;
+}
+
+bool ObsPlaybackBackend::openConfiguredSource(const char* sourceType, obs_data_t* settings, const std::filesystem::path& reference,
+                                              bool startPaused, bool supportsTransport, bool supportsAudio, bool liveInput) {
+    close();
+    m_pauseRequested.store(startPaused && supportsTransport);
+    if (!m_context.isInitialized()) {
+        LOG_ERROR("OBS media: Cannot open source because ObsContext is not initialized.");
+        obs_data_release(settings);
+        return false;
+    }
+    m_supportsTransport = supportsTransport;
+    m_supportsAudio = supportsAudio;
+    m_liveInput = liveInput;
+    LOG_INFO("OBS media: Creating '{}' source.", sourceType);
+    m_source = obs_source_create(sourceType, kSourceName, settings, nullptr);
     obs_data_release(settings);
     if (!m_source) {
-        LOG_ERROR("OBS media: obs_source_create('{}') failed for '{}'.", kSourceType, toUtf8Path(absolutePath));
+        LOG_ERROR("OBS media: obs_source_create('{}') failed for '{}'.", sourceType, toUtf8Path(reference));
         return false;
     }
     LOG_INFO("OBS media: Source creation succeeded; creating view.");
@@ -67,18 +133,30 @@ bool ObsPlaybackBackend::open(const std::filesystem::path& path, bool startPause
         return false;
     }
 
+    // obs_view_set_source activates ffmpeg_source synchronously. Subscribe
+    // before attaching, otherwise media_started can be emitted before a
+    // Preview source has a chance to apply its initial pause request.
+    connectMediaSignals();
     LOG_INFO("OBS media: Attaching source to view.");
     obs_view_set_source(m_view, 0, m_source);
-    connectMediaSignals();
-    // obs_view_create creates an AUX view.  It renders video but does not give
-    // the source an audio activation reference, which the WASAPI monitor needs.
+    // The active reference keeps ffmpeg_source decoding the first PVW frame.
+    // Audio monitoring remains disabled for PVW; this is a decode/render
+    // lifetime reference, not an audio route.
     obs_source_inc_active(m_source);
     m_sourceActive = true;
-    LOG_INFO("OBS media: Source activated for audio monitoring: active={}", obs_source_active(m_source));
+    LOG_INFO("OBS media: Source activated for decode/render: active={}", obs_source_active(m_source));
+    if (m_pauseRequested.load()) {
+        // Queue the pause before ffmpeg_source receives its first automatic
+        // start action. media_started repeats this request only as a guard for
+        // source implementations that finish opening asynchronously.
+        obs_source_media_play_pause(m_source, true);
+        LOG_INFO("OBS media: Queued initial pause before source startup.");
+    }
     LOG_INFO("OBS media: Source attached; enabling audio monitoring.");
-    m_path = absolutePath;
-    m_audioMonitoringEnabled = m_audioOutputEnabled && setAudioMonitoring(true);
-    LOG_INFO("OBS media: Created '{}' source for '{}'; startPaused={}", kSourceType, toUtf8Path(m_path), startPaused);
+    m_path = reference;
+    m_audioMonitoringEnabled = m_audioOutputEnabled && m_supportsAudio && setAudioMonitoring(true);
+    LOG_INFO("OBS media: Created '{}' source for '{}'; startPaused={} live={}", sourceType, toUtf8Path(m_path), startPaused,
+             m_liveInput);
     return true;
 }
 
@@ -107,10 +185,13 @@ void ObsPlaybackBackend::close() {
     m_mediaEnded.store(false);
     m_pendingSeekMs.store(-1);
     m_pendingSeekAttempts.store(0);
+    m_supportsTransport = true;
+    m_supportsAudio = true;
+    m_liveInput = false;
 }
 
 void ObsPlaybackBackend::play() {
-    if (!m_source) return;
+    if (!m_source || !m_supportsTransport) return;
 
     m_pauseRequested.store(false);
     // Recreate the monitor before resuming so it starts from OBS's current media clock.
@@ -124,7 +205,7 @@ void ObsPlaybackBackend::play() {
 }
 
 void ObsPlaybackBackend::pause() {
-    if (!m_source) return;
+    if (!m_source || !m_supportsTransport) return;
 
     // ffmpeg_source may finish opening after this call. Keep this intent so
     // onMediaStarted can pause it again after OBS completes asynchronous open.
@@ -137,17 +218,23 @@ void ObsPlaybackBackend::pause() {
 
 void ObsPlaybackBackend::enforcePendingPause() {
     enforcePendingSeek();
-    if (!m_source || !m_pauseRequested.load() || state() != ObsPlaybackState::Playing) return;
+    if (!m_source || !m_supportsTransport || !m_pauseRequested.load()) return;
 
-    // ffmpeg_source ignores a pause issued while its start callback is still
-    // running. Call on the next UI timer tick, after media_started returns.
+    const ObsPlaybackState currentState = state();
+    if (currentState == ObsPlaybackState::Paused || currentState == ObsPlaybackState::Stopped || currentState == ObsPlaybackState::Ended) {
+        return;
+    }
+
+    // A newly activated ffmpeg_source can remain Opening/Buffering before it
+    // reaches Playing. Keep queueing pause through those transient states until
+    // libobs reports a stable Paused state instead of only reacting to Playing.
     setAudioMonitoring(false);
     obs_source_media_play_pause(m_source, true);
-    LOG_INFO("OBS media: Applied pending pause after source startup completed.");
+    LOG_INFO("OBS media: Reasserted pending pause while state={}.", static_cast<int>(currentState));
 }
 
 void ObsPlaybackBackend::stop() {
-    if (!m_source) return;
+    if (!m_source || !m_supportsTransport) return;
 
     m_pauseRequested.store(true);
     setAudioMonitoring(false);
@@ -157,7 +244,7 @@ void ObsPlaybackBackend::stop() {
 }
 
 bool ObsPlaybackBackend::seekMs(int64_t milliseconds) {
-    if (!m_source) return false;
+    if (!m_source || !m_supportsTransport) return false;
     const int64_t duration = durationMs();
     const int64_t target = std::clamp(milliseconds, int64_t{0}, duration > 0 ? duration : milliseconds);
     m_pendingSeekMs.store(target);
@@ -175,7 +262,7 @@ bool ObsPlaybackBackend::seekMs(int64_t milliseconds) {
 }
 
 void ObsPlaybackBackend::enforcePendingSeek() {
-    if (!m_source) return;
+    if (!m_source || !m_supportsTransport) return;
     const int64_t target = m_pendingSeekMs.load();
     if (target < 0) return;
 
@@ -223,18 +310,46 @@ void ObsPlaybackBackend::setLooping(bool enabled) {
 }
 
 void ObsPlaybackBackend::setAudioOutputEnabled(bool enabled) {
-    if (m_audioOutputEnabled == enabled) return;
+    if (m_audioOutputEnabled == enabled) {
+        if (!m_source) return;
+        if (!enabled) {
+            setAudioMonitoring(false);
+            if (m_sourceActive) {
+                obs_source_dec_active(m_source);
+                m_sourceActive = false;
+            }
+        } else {
+            if (m_supportsAudio && !m_sourceActive) {
+                obs_source_inc_active(m_source);
+                m_sourceActive = true;
+                LOG_INFO("OBS media: Source activated for Program audio output.");
+            }
+            if (m_supportsAudio && state() == ObsPlaybackState::Playing) {
+                setAudioMonitoring(true);
+            }
+        }
+        return;
+    }
 
     m_audioOutputEnabled = enabled;
     if (!m_source) return;
 
     if (!enabled) {
         setAudioMonitoring(false);
+        if (m_sourceActive) {
+            obs_source_dec_active(m_source);
+            m_sourceActive = false;
+        }
         LOG_INFO("OBS media: Audio output disabled for this playback instance.");
         return;
     }
 
-    if (state() == ObsPlaybackState::Playing && !setAudioMonitoring(true)) {
+    if (m_supportsAudio && !m_sourceActive) {
+        obs_source_inc_active(m_source);
+        m_sourceActive = true;
+        LOG_INFO("OBS media: Source activated for Program audio output.");
+    }
+    if (m_supportsAudio && state() == ObsPlaybackState::Playing && !setAudioMonitoring(true)) {
         LOG_ERROR("OBS media: Failed to enable audio output for the playing instance.");
     } else {
         LOG_INFO("OBS media: Audio output enabled for this playback instance.");
@@ -273,7 +388,12 @@ void ObsPlaybackBackend::logDiagnostics() const {
 void ObsPlaybackBackend::onMediaStarted(void* data, calldata_t*) {
     auto* backend = static_cast<ObsPlaybackBackend*>(data);
     backend->m_mediaEnded.store(false);
-    if (backend->m_pauseRequested.load()) LOG_INFO("OBS media: Pending pause will be applied after startup callback.");
+    if (backend->m_pauseRequested.load()) {
+        // libobs queues media commands behind a mutex, so this is processed
+        // after the source has completed its asynchronous media_started path.
+        obs_source_media_play_pause(backend->m_source, true);
+        LOG_INFO("OBS media: Queued pause directly from media_started.");
+    }
     LOG_INFO("OBS media: Source signalled media_started.");
 }
 
@@ -314,6 +434,7 @@ ObsPlaybackState ObsPlaybackBackend::mapState(int obsState) {
 
 bool ObsPlaybackBackend::setAudioMonitoring(bool enabled) {
     if (!m_source) return false;
+    if (!m_supportsAudio) return !enabled;
 
     if (!enabled) {
         if (m_audioMonitoringEnabled) {

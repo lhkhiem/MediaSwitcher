@@ -10,6 +10,7 @@
 #include <unordered_map>
 
 class QLabel;
+class QImage;
 class QComboBox;
 class QCheckBox;
 class QListWidget;
@@ -69,21 +70,39 @@ private:
         bool sliderDragging{false};
     };
 
+    // A cue is the operator-visible PVW state.  It exists independently from
+    // an optional OBS decoder used only when the operator explicitly presses
+    // Play in PVW.  Keeping this separate prevents ffmpeg_source activation
+    // from changing the cue's transport state behind the UI's back.
+    struct PlaybackSnapshot {
+        uint64_t sourceId{0};
+        int64_t positionMs{0};
+        int64_t durationMs{0};
+        bool looping{false};
+        bool valid{false};
+    };
+
     static void draw(void* parameter, uint32_t width, uint32_t height);
     QWidget* createPanel(Panel& panel, const QString& title, const QString& color);
     bool openPanel(Panel& panel, const std::filesystem::path& mediaPath, bool audioOutput);
     void initializeDisplay(Panel& panel);
     void destroyDisplay(Panel& panel);
     void resizeDisplay(Panel& panel);
+    void updateMonitorLayout();
     void updatePanel(Panel& panel, const QString& role);
-    bool openStagedPreview(bool play);
+    bool openCatalogSource(ObsPlaybackBackend& backend, uint64_t sourceId, bool startPaused = false);
     void stagePreviewSource(const ObsCatalogSource& source);
     void stagePreviewAtPosition(const std::filesystem::path& path, uint64_t sourceId, int64_t positionMs);
+    void requestStagedPreviewFrame();
+    void showStagedPreviewFrame(int64_t positionMs, int64_t durationMs, const QImage& frame);
+    bool openStagedPreview(bool play);
+    PlaybackSnapshot capturePreviewSnapshot() const;
+    PlaybackSnapshot captureProgramSnapshot() const;
+    void stagePreviewSnapshot(const PlaybackSnapshot& snapshot);
+    void clearStagedPreviewMetadata();
     void clearPreviewSource();
     void clearProgramSource();
     bool isCatalogSourceAvailable(uint64_t sourceId) const;
-    void requestStagedPreviewFrame();
-    void showStagedPreviewFrame(int64_t positionMs, int64_t durationMs, const QImage& frame);
     void togglePanelPlayback(Panel& panel);
     void togglePanelLoop(Panel& panel);
     void resetPanel(Panel& panel);
@@ -93,7 +112,10 @@ private:
     void finishFadeIfComplete();
     void releaseFadeTransition();
     void addCatalogSource();
+    void addCatalogFiles(int sourceTypeFilter);
+    void addRtspSource();
     void removeCatalogSource();
+    void removeCatalogSource(uint64_t sourceId);
     void addSelectedCatalogSourceToPlaylist();
     void removeSelectedPlaylistStep();
     void movePlaylistStep(int delta);
@@ -106,7 +128,6 @@ private:
     void setProgramSourceId(uint64_t sourceId);
     void refreshPlaylistUi();
     void showPlaylistManager();
-    void primeIndependentStates();
     void toggleFullscreen();
     void toggleProgramOutputFullscreen();
     void closePanels();
@@ -127,6 +148,7 @@ private:
     QPushButton* m_removeSourceButton{nullptr};
     QPushButton* m_openPlaylistButton{nullptr};
     QComboBox* m_catalogThumbnailSize{nullptr};
+    QComboBox* m_sourceTypeFilter{nullptr};
     QPushButton* m_playlistPreviousButton{nullptr};
     QPushButton* m_playlistNextButton{nullptr};
     QComboBox* m_fadeDuration{nullptr};
@@ -136,6 +158,8 @@ private:
     QListWidget* m_sourceCatalogList{nullptr};
     QListWidget* m_playlistList{nullptr};
     QDialog* m_playlistDialog{nullptr};
+    QWidget* m_switcherArea{nullptr};
+    QWidget* m_inputBank{nullptr};
     std::unordered_map<uint64_t, QPixmap> m_sourceThumbnails;
     std::filesystem::path m_stagedPreviewPath;
     uint64_t m_stagedPreviewSourceId{0};
@@ -147,7 +171,8 @@ private:
     uint64_t m_fadeOutgoingSourceId{0};
     int m_catalogThumbnailWidth{160};
     bool m_closing{false};
-    bool m_statesPrimed{false};
     bool m_fadeActive{false};
+    bool m_fadeCleanupQueued{false};
     bool m_playlistMode{false};
+    PlaybackSnapshot m_fadeOutgoingSnapshot;
 };

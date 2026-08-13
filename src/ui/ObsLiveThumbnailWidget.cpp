@@ -10,8 +10,8 @@ extern "C" {
 #include <QResizeEvent>
 #include <QShowEvent>
 
-ObsLiveThumbnailWidget::ObsLiveThumbnailWidget(ObsPlaybackBackend* backend, QWidget* parent)
-    : QWidget(parent), m_backend(backend) {
+ObsLiveThumbnailWidget::ObsLiveThumbnailWidget(std::function<ObsPlaybackBackend*()> backendProvider, QWidget* parent)
+    : QWidget(parent), m_backendProvider(std::move(backendProvider)) {
     setAttribute(Qt::WA_NativeWindow);
     setAttribute(Qt::WA_TransparentForMouseEvents);
     setStyleSheet(QStringLiteral("background: black;"));
@@ -31,11 +31,14 @@ void ObsLiveThumbnailWidget::resizeEvent(QResizeEvent* event) {
 
 void ObsLiveThumbnailWidget::draw(void* parameter, uint32_t width, uint32_t height) {
     auto* widget = static_cast<ObsLiveThumbnailWidget*>(parameter);
-    if (widget && widget->m_backend) widget->m_backend->render(width, height);
+    if (!widget || !widget->m_backendProvider) return;
+    if (ObsPlaybackBackend* backend = widget->m_backendProvider(); backend && backend->isOpen()) {
+        backend->render(width, height);
+    }
 }
 
 void ObsLiveThumbnailWidget::initializeDisplay() {
-    if (m_display || !m_backend || !m_backend->isOpen() || width() <= 0 || height() <= 0) return;
+    if (m_display || !m_backendProvider || width() <= 0 || height() <= 0) return;
     gs_init_data graphicsData{};
     graphicsData.window.hwnd = reinterpret_cast<void*>(winId());
     graphicsData.cx = static_cast<uint32_t>(width());

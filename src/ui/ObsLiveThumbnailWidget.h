@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <cstdint>
+#include <functional>
 
 class ObsPlaybackBackend;
 class QResizeEvent;
@@ -12,7 +13,7 @@ typedef struct obs_display obs_display_t;
 class ObsLiveThumbnailWidget final : public QWidget {
     Q_OBJECT
 public:
-    explicit ObsLiveThumbnailWidget(ObsPlaybackBackend* backend, QWidget* parent = nullptr);
+    explicit ObsLiveThumbnailWidget(std::function<ObsPlaybackBackend*()> backendProvider, QWidget* parent = nullptr);
     ~ObsLiveThumbnailWidget() override;
 
 protected:
@@ -24,6 +25,6 @@ private:
     void initializeDisplay();
     void destroyDisplay();
 
-    ObsPlaybackBackend* m_backend{nullptr};
+    std::function<ObsPlaybackBackend*()> m_backendProvider;
     obs_display_t* m_display{nullptr};
 };

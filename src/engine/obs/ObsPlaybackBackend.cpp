@@ -105,6 +105,8 @@ void ObsPlaybackBackend::close() {
     m_sourceActive = false;
     m_pauseRequested.store(false);
     m_mediaEnded.store(false);
+    m_pendingSeekMs.store(-1);
+    m_pendingSeekAttempts.store(0);
 }
 
 void ObsPlaybackBackend::play() {
@@ -134,6 +136,7 @@ void ObsPlaybackBackend::pause() {
 }
 
 void ObsPlaybackBackend::enforcePendingPause() {
+    enforcePendingSeek();
     if (!m_source || !m_pauseRequested.load() || state() != ObsPlaybackState::Playing) return;
 
     // ffmpeg_source ignores a pause issued while its start callback is still
@@ -157,6 +160,8 @@ bool ObsPlaybackBackend::seekMs(int64_t milliseconds) {
     if (!m_source) return false;
     const int64_t duration = durationMs();
     const int64_t target = std::clamp(milliseconds, int64_t{0}, duration > 0 ? duration : milliseconds);
+    m_pendingSeekMs.store(target);
+    m_pendingSeekAttempts.store(0);
     const bool resumeAfterSeek = state() == ObsPlaybackState::Playing;
     setAudioMonitoring(false);
     obs_source_media_set_time(m_source, target);
@@ -167,6 +172,32 @@ bool ObsPlaybackBackend::seekMs(int64_t milliseconds) {
     }
     LOG_INFO("OBS media: Seek requested to {} ms after audio monitor flush.", target);
     return true;
+}
+
+void ObsPlaybackBackend::enforcePendingSeek() {
+    if (!m_source) return;
+    const int64_t target = m_pendingSeekMs.load();
+    if (target < 0) return;
+
+    const ObsPlaybackState currentState = state();
+    if (currentState == ObsPlaybackState::Opening || currentState == ObsPlaybackState::Buffering ||
+        currentState == ObsPlaybackState::None) {
+        return;
+    }
+
+    const int attempt = m_pendingSeekAttempts.fetch_add(1);
+    if (attempt > 0) {
+        m_pendingSeekMs.store(-1);
+        return;
+    }
+
+    // ffmpeg_source can ignore a seek issued while its asynchronous media open
+    // is still completing. Re-issue it once after media becomes active. Do not
+    // recreate the WASAPI monitor here: doing that every timer tick caused PGM
+    // to flash and repeatedly interrupt audio.
+    obs_source_media_set_time(m_source, target);
+    m_mediaEnded.store(false);
+    LOG_INFO("OBS media: Applied one deferred seek to {} ms after source initialization.", target);
 }
 
 int64_t ObsPlaybackBackend::positionMs() const { return m_source ? obs_source_media_get_time(m_source) : 0; }

@@ -79,6 +79,9 @@ private:
     bool openStagedPreview(bool play);
     void stagePreviewSource(const ObsCatalogSource& source);
     void stagePreviewAtPosition(const std::filesystem::path& path, uint64_t sourceId, int64_t positionMs);
+    void clearPreviewSource();
+    void clearProgramSource();
+    bool isCatalogSourceAvailable(uint64_t sourceId) const;
     void requestStagedPreviewFrame();
     void showStagedPreviewFrame(int64_t positionMs, int64_t durationMs, const QImage& frame);
     void togglePanelPlayback(Panel& panel);
@@ -116,7 +119,6 @@ private:
     ObsContext& m_context;
     QTimer* m_timer{nullptr};
     QTimer* m_stagedSeekTimer{nullptr};
-    QPushButton* m_takeButton{nullptr};
     QPushButton* m_quickPlayButton{nullptr};
     QPushButton* m_cutButton{nullptr};
     QPushButton* m_fadeButton{nullptr};

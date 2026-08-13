@@ -55,6 +55,7 @@ private:
     bool setAudioMonitoring(bool enabled);
     void connectMediaSignals();
     void disconnectMediaSignals();
+    void enforcePendingSeek();
 
     ObsContext& m_context;
     obs_source_t* m_source{nullptr};
@@ -67,4 +68,6 @@ private:
     bool m_mediaSignalsConnected{false};
     std::atomic_bool m_pauseRequested{false};
     std::atomic_bool m_mediaEnded{false};
+    std::atomic_int64_t m_pendingSeekMs{-1};
+    std::atomic_int m_pendingSeekAttempts{0};
 };

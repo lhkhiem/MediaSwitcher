@@ -10,6 +10,7 @@
 extern "C" {
 #include <callback/signal.h>
 #include <graphics/graphics.h>
+#include <graphics/vec4.h>
 #include <obs.h>
 }
 
@@ -29,6 +30,7 @@ extern "C" {
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMetaObject>
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QMenu>
@@ -48,6 +50,7 @@ extern "C" {
 #include <QUrl>
 
 #include <algorithm>
+#include <cstring>
 #include <functional>
 
 namespace {
@@ -271,8 +274,11 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     refreshCatalogUi();
     connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailReady, this, [this](int sourceId, const QImage& image) {
         if (!m_sourceCatalog->find(static_cast<uint64_t>(sourceId))) return;
-        m_sourceThumbnails[static_cast<uint64_t>(sourceId)] = QPixmap::fromImage(image);
-        refreshCatalogUi();
+        const uint64_t id = static_cast<uint64_t>(sourceId);
+        m_sourceThumbnails[id] = QPixmap::fromImage(image);
+        if (const auto label = m_catalogThumbnailLabels.find(id); label != m_catalogThumbnailLabels.end() && label->second) {
+            label->second->setPixmap(fitCatalogThumbnail(m_sourceThumbnails[id], m_catalogThumbnailWidth));
+        }
     });
     connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::previewFrameReady, this,
             [this](quint64 sourceId, int64_t positionMs, int64_t durationMs, const QImage& image) {
@@ -365,10 +371,69 @@ void ObsDualMediaTestWindow::keyPressEvent(QKeyEvent* event) {
 
 void ObsDualMediaTestWindow::draw(void* parameter, uint32_t width, uint32_t height) {
     auto* panel = static_cast<Panel*>(parameter);
-    if (panel && panel->backend) panel->backend->render(width, height);
+    if (!panel || !panel->backend) return;
+    panel->backend->render(width, height);
+    captureProgramThumbnail(*panel);
+}
+
+void ObsDualMediaTestWindow::captureProgramThumbnail(Panel& panel) {
+    constexpr uint32_t thumbnailWidth = 320;
+    constexpr uint32_t thumbnailHeight = 180;
+    constexpr uint32_t captureEveryFrames = 6;
+
+    if (!panel.owner || !panel.thumbnailCaptureEnabled.load() || !panel.backend || !panel.backend->isOpen()) return;
+    if (++panel.thumbnailFrameCounter % captureEveryFrames != 0) return;
+
+    if (!panel.thumbnailTexrender) {
+        panel.thumbnailTexrender = gs_texrender_create(GS_BGRA, GS_ZS_NONE);
+        panel.thumbnailStages[0] = gs_stagesurface_create(thumbnailWidth, thumbnailHeight, GS_BGRA);
+        panel.thumbnailStages[1] = gs_stagesurface_create(thumbnailWidth, thumbnailHeight, GS_BGRA);
+        panel.thumbnailStages[2] = gs_stagesurface_create(thumbnailWidth, thumbnailHeight, GS_BGRA);
+        if (!panel.thumbnailTexrender || !panel.thumbnailStages[0] || !panel.thumbnailStages[1] || !panel.thumbnailStages[2]) {
+            LOG_ERROR("OBS thumbnail: Failed to allocate the Program frame capture textures.");
+            return;
+        }
+        LOG_INFO("OBS thumbnail: Program GPU frame tap initialized at {}x{}.", thumbnailWidth, thumbnailHeight);
+    }
+
+    // gs_texrender is single-use until reset.  Without this call only the
+    // first capture can begin and every later live thumbnail frame is dropped.
+    gs_texrender_reset(panel.thumbnailTexrender);
+    if (!gs_texrender_begin(panel.thumbnailTexrender, thumbnailWidth, thumbnailHeight)) return;
+    const vec4 black{};
+    gs_clear(GS_CLEAR_COLOR, &black, 0.0f, 0);
+    panel.backend->render(thumbnailWidth, thumbnailHeight);
+    gs_texrender_end(panel.thumbnailTexrender);
+
+    gs_texture_t* texture = gs_texrender_get_texture(panel.thumbnailTexrender);
+    if (!texture) return;
+    gs_stage_texture(panel.thumbnailStages[panel.thumbnailWriteStage], texture);
+
+    // D3D11 staging reads are asynchronous.  Keep two full render intervals
+    // between stage and map so the UI never blocks waiting for the GPU.
+    const uint32_t readyStage = (panel.thumbnailWriteStage + 1U) % 3U;
+    uint8_t* data = nullptr;
+    uint32_t lineSize = 0;
+    if (gs_stagesurface_map(panel.thumbnailStages[readyStage], &data, &lineSize)) {
+        QImage frame(static_cast<int>(thumbnailWidth), static_cast<int>(thumbnailHeight), QImage::Format_ARGB32);
+        for (uint32_t row = 0; row < thumbnailHeight; ++row) {
+            std::memcpy(frame.scanLine(static_cast<int>(row)), data + static_cast<size_t>(row) * lineSize,
+                        static_cast<size_t>(thumbnailWidth) * 4U);
+        }
+        gs_stagesurface_unmap(panel.thumbnailStages[readyStage]);
+        const uint64_t sourceId = panel.thumbnailSourceId.load();
+        if (!panel.thumbnailFrameDelivered.exchange(true)) {
+            LOG_INFO("OBS thumbnail: Program GPU frame tap delivered its first frame for source #{}.", sourceId);
+        }
+        QMetaObject::invokeMethod(panel.owner, [owner = panel.owner, sourceId, frame = std::move(frame)]() mutable {
+            if (!owner->m_closing) owner->showProgramThumbnail(sourceId, frame);
+        }, Qt::QueuedConnection);
+    }
+    panel.thumbnailWriteStage = (panel.thumbnailWriteStage + 1U) % 3U;
 }
 
 QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title, const QString& color) {
+    panel.owner = this;
     auto* group = new QWidget(this);
     group->setObjectName(QStringLiteral("monitorPanel"));
     group->setStyleSheet(QStringLiteral("#monitorPanel { background: #11161b; border: 0; }"));
@@ -503,6 +568,21 @@ void ObsDualMediaTestWindow::initializeDisplay(Panel& panel) {
 }
 
 void ObsDualMediaTestWindow::destroyDisplay(Panel& panel) {
+    if (panel.thumbnailTexrender || panel.thumbnailStages[0] || panel.thumbnailStages[1] || panel.thumbnailStages[2]) {
+        obs_enter_graphics();
+        if (panel.thumbnailStages[0]) gs_stagesurface_destroy(panel.thumbnailStages[0]);
+        if (panel.thumbnailStages[1]) gs_stagesurface_destroy(panel.thumbnailStages[1]);
+        if (panel.thumbnailStages[2]) gs_stagesurface_destroy(panel.thumbnailStages[2]);
+        if (panel.thumbnailTexrender) gs_texrender_destroy(panel.thumbnailTexrender);
+        obs_leave_graphics();
+        panel.thumbnailStages[0] = nullptr;
+        panel.thumbnailStages[1] = nullptr;
+        panel.thumbnailStages[2] = nullptr;
+        panel.thumbnailTexrender = nullptr;
+        panel.thumbnailWriteStage = 0;
+        panel.thumbnailFrameCounter = 0;
+        panel.thumbnailFrameDelivered.store(false);
+    }
     if (!panel.display) return;
     obs_display_remove_draw_callback(panel.display, draw, &panel);
     obs_display_destroy(panel.display);
@@ -651,6 +731,15 @@ void ObsDualMediaTestWindow::showStagedPreviewFrame(int64_t positionMs, int64_t 
     m_preview.stagedFrameLabel->setText({});
     if (m_preview.videoStack) m_preview.videoStack->setCurrentWidget(m_preview.stagedFrameLabel);
     LOG_INFO("OBS app: Decoded staged PVW frame for source #{} at {} ms.", m_stagedPreviewSourceId, positionMs);
+}
+
+void ObsDualMediaTestWindow::showProgramThumbnail(uint64_t sourceId, const QImage& frame) {
+    if (sourceId == 0 || sourceId != m_programSourceId || !m_sourceCatalog->find(sourceId)) return;
+    m_sourceThumbnails[sourceId] = QPixmap::fromImage(frame);
+    if (const auto label = m_catalogThumbnailLabels.find(sourceId);
+        label != m_catalogThumbnailLabels.end() && label->second) {
+        label->second->setPixmap(fitCatalogThumbnail(m_sourceThumbnails[sourceId], m_catalogThumbnailWidth));
+    }
 }
 
 bool ObsDualMediaTestWindow::openStagedPreview(bool play) {
@@ -1300,6 +1389,7 @@ bool ObsDualMediaTestWindow::navigatePlaylist(bool forward, const char* reason) 
 }
 
 void ObsDualMediaTestWindow::refreshCatalogUi() {
+    m_catalogThumbnailLabels.clear();
     m_sourceCatalogList->clear();
     const int selectedType = m_sourceTypeFilter ? m_sourceTypeFilter->currentData().toInt() : -1;
     const size_t realSourceCount = static_cast<size_t>(std::count_if(m_sourceCatalog->sources().begin(), m_sourceCatalog->sources().end(),
@@ -1356,6 +1446,7 @@ void ObsDualMediaTestWindow::refreshCatalogUi() {
             thumbnailLabel->setPixmap(previewPixmap);
             thumbnailLabel->setAlignment(Qt::AlignCenter);
             thumbnailLabel->setStyleSheet(QStringLiteral("background: #0e1216; border: 0;"));
+            m_catalogThumbnailLabels[source.id] = thumbnailLabel;
             previewWidget = thumbnailLabel;
         }
         previewWidget->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -1401,6 +1492,12 @@ void ObsDualMediaTestWindow::setCatalogThumbnailSize(int width) {
 
 void ObsDualMediaTestWindow::setProgramSourceId(uint64_t sourceId) {
     m_programSourceId = sourceId;
+    const auto source = m_sourceCatalog ? m_sourceCatalog->find(sourceId) : std::nullopt;
+    const bool captureVideo = source && source->type == ObsCatalogSourceType::VideoFile;
+    m_program.thumbnailSourceId.store(sourceId);
+    m_program.thumbnailCaptureEnabled.store(captureVideo);
+    m_program.thumbnailFrameCounter = 0;
+    m_program.thumbnailFrameDelivered.store(false);
     refreshCatalogUi();
 }
 

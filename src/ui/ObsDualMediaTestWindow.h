@@ -32,8 +32,12 @@ class QKeyEvent;
 class QEvent;
 struct obs_display;
 struct obs_source;
+struct gs_texture_render;
+struct gs_stage_surface;
 typedef struct obs_display obs_display_t;
 typedef struct obs_source obs_source_t;
+typedef struct gs_texture_render gs_texrender_t;
+typedef struct gs_stage_surface gs_stagesurf_t;
 
 class ObsDualMediaTestWindow final : public QWidget {
     Q_OBJECT
@@ -51,6 +55,7 @@ protected:
 
 private:
     struct Panel {
+        ObsDualMediaTestWindow* owner{nullptr};
         std::unique_ptr<ObsPlaybackBackend> backend;
         std::unique_ptr<ObsPlaybackBackend> fadeOutgoing;
         QWidget* videoContainer{nullptr};
@@ -67,6 +72,13 @@ private:
         obs_display_t* display{nullptr};
         obs_source_t* fadeTransition{nullptr};
         std::atomic_bool fadeVideoCompleted{false};
+        std::atomic_uint64_t thumbnailSourceId{0};
+        std::atomic_bool thumbnailCaptureEnabled{false};
+        gs_texrender_t* thumbnailTexrender{nullptr};
+        gs_stagesurf_t* thumbnailStages[3]{nullptr, nullptr, nullptr};
+        uint32_t thumbnailWriteStage{0};
+        uint32_t thumbnailFrameCounter{0};
+        std::atomic_bool thumbnailFrameDelivered{false};
         bool sliderDragging{false};
     };
 
@@ -83,6 +95,7 @@ private:
     };
 
     static void draw(void* parameter, uint32_t width, uint32_t height);
+    static void captureProgramThumbnail(Panel& panel);
     QWidget* createPanel(Panel& panel, const QString& title, const QString& color);
     bool openPanel(Panel& panel, const std::filesystem::path& mediaPath, bool audioOutput);
     void initializeDisplay(Panel& panel);
@@ -95,6 +108,7 @@ private:
     void stagePreviewAtPosition(const std::filesystem::path& path, uint64_t sourceId, int64_t positionMs);
     void requestStagedPreviewFrame();
     void showStagedPreviewFrame(int64_t positionMs, int64_t durationMs, const QImage& frame);
+    void showProgramThumbnail(uint64_t sourceId, const QImage& frame);
     bool openStagedPreview(bool play);
     PlaybackSnapshot capturePreviewSnapshot() const;
     PlaybackSnapshot captureProgramSnapshot() const;
@@ -161,6 +175,7 @@ private:
     QWidget* m_switcherArea{nullptr};
     QWidget* m_inputBank{nullptr};
     std::unordered_map<uint64_t, QPixmap> m_sourceThumbnails;
+    std::unordered_map<uint64_t, QLabel*> m_catalogThumbnailLabels;
     std::filesystem::path m_stagedPreviewPath;
     uint64_t m_stagedPreviewSourceId{0};
     uint64_t m_previewSourceId{0};

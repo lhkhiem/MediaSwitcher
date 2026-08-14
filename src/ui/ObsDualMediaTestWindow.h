@@ -115,6 +115,7 @@ private:
     void resizeDisplay(Panel& panel);
     void updateMonitorLayout();
     void updatePanel(Panel& panel, const QString& role);
+    void updateProcessMetrics();
     bool openCatalogSource(ObsPlaybackBackend& backend, uint64_t sourceId, bool startPaused = false);
     void stagePreviewSource(const ObsCatalogSource& source);
     void stagePreviewAtPosition(const std::filesystem::path& path, uint64_t sourceId, int64_t positionMs);
@@ -171,6 +172,8 @@ private:
     std::unique_ptr<ObsProgramOutputWindow> m_programOutput;
     ObsContext& m_context;
     QTimer* m_timer{nullptr};
+    QTimer* m_processMetricsTimer{nullptr};
+    QLabel* m_processMetricsLabel{nullptr};
     QTimer* m_stagedSeekTimer{nullptr};
     QPushButton* m_quickPlayButton{nullptr};
     QPushButton* m_cutButton{nullptr};

@@ -3,6 +3,7 @@
 #include "app/WorkspaceManager.h"
 #include "ui/MainWindow.h"
 #include "engine/audio/AudioEngine.h"
+#include "engine/diagnostics/MediaDiagnostics.h"
 #ifdef MEDIASWITCHER_ENABLE_OBS
 #include "engine/obs/ObsContext.h"
 #include "engine/obs/ObsPlaybackBackend.h"
@@ -131,10 +132,12 @@ int main(int argc, char* argv[]) {
         }
         LOG_INFO("OBS initialized: yes");
 
+        MediaDiagnostics::instance().start();
         ObsDualMediaTestWindow testWindow(obsContext, std::filesystem::path(dualMediaTestPath.toStdWString()));
         testWindow.show();
         LOG_INFO("OBS dual media test running for '{}'.", dualMediaTestPath.toStdString());
         const int result = app.exec();
+        MediaDiagnostics::instance().stop();
         LOG_INFO("OBS dual media test exiting with code {}.", result);
         return result;
     }
@@ -200,10 +203,12 @@ int main(int argc, char* argv[]) {
         }
         LOG_INFO("OBS initialized: yes");
 
+        MediaDiagnostics::instance().start();
         ObsDualMediaTestWindow mainWindow(obsContext);
         mainWindow.show();
         LOG_INFO("OBS application running with an empty Input Bank.");
         const int result = app.exec();
+        MediaDiagnostics::instance().stop();
         LOG_INFO("OBS application exiting with code {}.", result);
         return result;
     }
@@ -212,6 +217,7 @@ int main(int argc, char* argv[]) {
     if (!AudioEngine::instance().initialize()) {
         LOG_ERROR("Failed to initialize AudioEngine (XAudio2). Audio will be silent.");
     }
+    MediaDiagnostics::instance().start();
 
 #ifndef MEDIASWITCHER_ENABLE_OBS
     LOG_INFO("Startup mode: Legacy");
@@ -238,6 +244,7 @@ int main(int argc, char* argv[]) {
         result = app.exec();
     }
 
+    MediaDiagnostics::instance().stop();
     AudioEngine::instance().shutdown();
     LOG_INFO("MediaSwitcher exiting with code {}", result);
     return result;

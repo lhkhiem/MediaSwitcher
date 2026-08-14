@@ -61,6 +61,7 @@ private slots:
     void onPgmLoopToggleClicked();
     void onPgmSeekSliderSliderMoved(int value);
     void updatePlaybackStatus();
+    void updateProcessMetrics();
     void onCategoryFilterClicked(const QString& category);
     void onSearchTextChanged(const QString& text);
 
@@ -137,6 +138,7 @@ private:
     bool m_isPgmUserSeeking{false};
 
     QTimer* m_playbackTimer{nullptr};
+    QTimer* m_processMetricsTimer{nullptr};
 
     // Debug Resource Metrics Panel Label
     QLabel* m_metricsLabel{nullptr};

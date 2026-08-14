@@ -8,11 +8,10 @@
 #include "common/config/AppInfo.h"
 #include "engine/input/GlobalPlaylistController.h"
 #include "engine/audio/AudioEngine.h"
+#include "engine/diagnostics/MediaDiagnostics.h"
 #include "common/logger/Logger.h"
 #include <algorithm>
 #include <chrono>
-#include <windows.h>
-#include <psapi.h>
 
 #include <QMenuBar>
 #include <QToolBar>
@@ -59,6 +58,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_playbackTimer = new QTimer(this);
     connect(m_playbackTimer, &QTimer::timeout, this, &MainWindow::updatePlaybackStatus);
     m_playbackTimer->start(100);
+
+    m_processMetricsTimer = new QTimer(this);
+    connect(m_processMetricsTimer, &QTimer::timeout, this, &MainWindow::updateProcessMetrics);
+    m_processMetricsTimer->start(2000);
+    updateProcessMetrics();
 }
 
 MainWindow::~MainWindow() {
@@ -1915,25 +1919,6 @@ void MainWindow::updatePlaybackStatus() {
         }
     }
 
-    // 0. Update Debug Resource Metrics Panel
-    if (m_metricsLabel) {
-        PROCESS_MEMORY_COUNTERS pmc;
-        size_t ramMb = 0;
-        if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
-            ramMb = pmc.WorkingSetSize / (1024 * 1024);
-        }
-        size_t totalSources = m_inputManager.inputSlots().size();
-        size_t activeDecoders = m_inputManager.activeDecoderCount();
-        int preloadId = m_inputManager.preloadSlotId();
-
-        QString preloadStr = (preloadId > 0) ? QString(" [Preload #%1]").arg(preloadId) : "";
-        m_metricsLabel->setText(QString("📊 Sources: %1 | Active Decoders: %2/3%3 | RAM: ~%4 MB")
-                                .arg(totalSources)
-                                .arg(activeDecoders)
-                                .arg(preloadStr)
-                                .arg(ramMb));
-    }
-
     // 1. PREVIEW (PVW) Status
     auto pvwSource = m_inputManager.previewSource();
     if (!pvwSource || pvwSource->durationSeconds() <= 0.0) {
@@ -2082,6 +2067,56 @@ void MainWindow::updatePlaybackStatus() {
 
     // Audio pumping is handled by the dedicated m_audioPumpThread (audioPumpLoop),
     // NOT here, so that audio delivery is never blocked by Qt UI event processing.
+}
+
+void MainWindow::updateProcessMetrics() {
+    if (!m_metricsLabel) return;
+
+    const ProcessMetricsSnapshot metrics = MediaDiagnostics::instance().processMetricsSnapshot();
+    const size_t totalSources = m_inputManager.inputSlots().size();
+    const size_t activeDecoders = m_inputManager.activeDecoderCount();
+    const int preloadId = m_inputManager.preloadSlotId();
+    const QString preloadText = preloadId > 0 ? QString(" + nạp trước #%1").arg(preloadId) : QString();
+    const auto toMiB = [](uint64_t bytes) { return bytes / (1024ULL * 1024ULL); };
+    const uint64_t hours = metrics.uptimeSeconds / 3600;
+    const uint64_t minutes = (metrics.uptimeSeconds % 3600) / 60;
+    const uint64_t seconds = metrics.uptimeSeconds % 60;
+    const QString uptime = QString("%1:%2:%3")
+                               .arg(hours, 2, 10, QLatin1Char('0'))
+                               .arg(minutes, 2, 10, QLatin1Char('0'))
+                               .arg(seconds, 2, 10, QLatin1Char('0'));
+
+    m_metricsLabel->setText(
+        QString("📊 %1 nguồn | %2/3 decoder%3 | CPU %4% | RAM %5 MB | %6 luồng | ⏱ %7")
+            .arg(totalSources)
+            .arg(activeDecoders)
+            .arg(preloadText)
+            .arg(metrics.cpuPercent, 0, 'f', 1)
+            .arg(toMiB(metrics.workingSetBytes))
+            .arg(metrics.threadCount)
+            .arg(uptime));
+
+    m_metricsLabel->setToolTip(
+        QString("THÔNG SỐ TIẾN TRÌNH MEDIASWITCHER\n"
+                "PID: %1\n"
+                "CPU: %2% (%3 bộ xử lý logic)\n"
+                "RAM working set: %4 MB\n"
+                "RAM private: %5 MB\n"
+                "Số luồng: %6\n"
+                "Số handle: %7\n"
+                "I/O đã đọc: %8 MB\n"
+                "I/O đã ghi: %9 MB\n"
+                "Thời gian chạy: %10")
+            .arg(metrics.processId)
+            .arg(metrics.cpuPercent, 0, 'f', 1)
+            .arg(metrics.logicalProcessorCount)
+            .arg(toMiB(metrics.workingSetBytes))
+            .arg(toMiB(metrics.privateBytes))
+            .arg(metrics.threadCount)
+            .arg(metrics.handleCount)
+            .arg(toMiB(metrics.ioReadBytes))
+            .arg(toMiB(metrics.ioWriteBytes))
+            .arg(uptime));
 }
 
 

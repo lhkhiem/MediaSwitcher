@@ -3,6 +3,7 @@
 
 #include "common/logger/Logger.h"
 #include "engine/input/ThumbnailGenerator.h"
+#include "engine/diagnostics/MediaDiagnostics.h"
 #include "engine/obs/ObsContext.h"
 #include "engine/obs/ObsPlaybackBackend.h"
 #include "engine/obs/ObsPlaylist.h"
@@ -327,6 +328,14 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     inputBankLayout->addWidget(m_sourceCatalogList, 1);
     rootLayout->addWidget(inputBank, 1);
 
+    m_processMetricsLabel = new QLabel(this);
+    m_processMetricsLabel->setMinimumHeight(26);
+    m_processMetricsLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_processMetricsLabel->setStyleSheet(QStringLiteral(
+        "QLabel { background: #11171c; color: #76d7ea; border: 1px solid #34434d; "
+        "padding: 4px 8px; font-family: 'Consolas', 'Courier New', monospace; font-weight: bold; }"));
+    rootLayout->addWidget(m_processMetricsLabel);
+
     connect(m_quickPlayButton, &QPushButton::clicked, this, [this] { promotePreviewToProgram("Quick Play"); });
     connect(m_cutButton, &QPushButton::clicked, this, [this] { promotePreviewToProgram("CUT"); });
     connect(m_fadeButton, &QPushButton::clicked, this, [this] { fadePreviewToProgram(); });
@@ -417,6 +426,10 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
         }
     });
     m_timer->start(200);
+    m_processMetricsTimer = new QTimer(this);
+    connect(m_processMetricsTimer, &QTimer::timeout, this, &ObsDualMediaTestWindow::updateProcessMetrics);
+    m_processMetricsTimer->start(2000);
+    updateProcessMetrics();
     QTimer::singleShot(0, this, [this] {
         updateMonitorLayout();
         initializeDisplay(m_preview);
@@ -834,6 +847,69 @@ void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
     const QString sourceText = QStringLiteral("%1  %2").arg(role, sourceName);
     panel.sourceLabel->setText(panel.sourceLabel->fontMetrics().elidedText(
         sourceText, Qt::ElideRight, panel.sourceLabel->width()));
+}
+
+void ObsDualMediaTestWindow::updateProcessMetrics() {
+    if (!m_processMetricsLabel) return;
+
+    const ProcessMetricsSnapshot metrics = MediaDiagnostics::instance().processMetricsSnapshot();
+    const auto toMiB = [](uint64_t bytes) { return bytes / (1024ULL * 1024ULL); };
+    const QString uptime = formatMilliseconds(static_cast<int64_t>(metrics.uptimeSeconds) * 1000);
+    const auto frameRate = m_context.videoFrameRate();
+    const double fps = frameRate.denominator > 0
+        ? static_cast<double>(frameRate.numerator) / static_cast<double>(frameRate.denominator)
+        : 0.0;
+    const size_t sourceCount = m_sourceCatalog ? m_sourceCatalog->sources().size() : 0;
+    const int activeDecoders =
+        (m_preview.backend && m_preview.backend->isOpen() ? 1 : 0) +
+        (m_program.backend && m_program.backend->isOpen() ? 1 : 0) +
+        (m_program.fadeOutgoing && m_program.fadeOutgoing->isOpen() ? 1 : 0);
+    const bool compactLayout = width() < 990 || height() >= width();
+
+    if (compactLayout) {
+        m_processMetricsLabel->setText(
+            QStringLiteral("📊 CPU %1% | RAM %2 MB | %3 luồng | FPS %4 | ⏱ %5")
+                .arg(metrics.cpuPercent, 0, 'f', 1)
+                .arg(toMiB(metrics.workingSetBytes))
+                .arg(metrics.threadCount)
+                .arg(fps, 0, 'f', 2)
+                .arg(uptime));
+    } else {
+        m_processMetricsLabel->setText(
+            QStringLiteral("📊 TIẾN TRÌNH | PID %1 | CPU %2% | RAM %3/%4 MB | %5 luồng | %6 handle | FPS %7 | Input %8 | Decoder %9/3 | ⏱ %10")
+                .arg(metrics.processId)
+                .arg(metrics.cpuPercent, 0, 'f', 1)
+                .arg(toMiB(metrics.workingSetBytes))
+                .arg(toMiB(metrics.privateBytes))
+                .arg(metrics.threadCount)
+                .arg(metrics.handleCount)
+                .arg(fps, 0, 'f', 2)
+                .arg(sourceCount)
+                .arg(activeDecoders)
+                .arg(uptime));
+    }
+
+    m_processMetricsLabel->setToolTip(
+        QStringLiteral("THÔNG SỐ TIẾN TRÌNH MEDIASWITCHER OBS\n"
+                       "PID: %1\nCPU: %2% (%3 bộ xử lý logic)\n"
+                       "RAM working set: %4 MB\nRAM private: %5 MB\n"
+                       "Số luồng: %6\nSố handle: %7\n"
+                       "I/O đã đọc: %8 MB\nI/O đã ghi: %9 MB\n"
+                       "Project FPS: %10\nInput: %11\nDecoder đang hoạt động: %12/3\n"
+                       "Thời gian chạy: %13")
+            .arg(metrics.processId)
+            .arg(metrics.cpuPercent, 0, 'f', 1)
+            .arg(metrics.logicalProcessorCount)
+            .arg(toMiB(metrics.workingSetBytes))
+            .arg(toMiB(metrics.privateBytes))
+            .arg(metrics.threadCount)
+            .arg(metrics.handleCount)
+            .arg(toMiB(metrics.ioReadBytes))
+            .arg(toMiB(metrics.ioWriteBytes))
+            .arg(fps, 0, 'f', 2)
+            .arg(sourceCount)
+            .arg(activeDecoders)
+            .arg(uptime));
 }
 
 void ObsDualMediaTestWindow::stagePreviewSource(const ObsCatalogSource& source) {

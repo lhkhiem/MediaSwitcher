@@ -63,16 +63,12 @@ bool AudioEngine::initialize() {
     m_initialized = true;
     m_feedThread = std::thread(&AudioEngine::bufferFeedLoop, this);
 
-    MediaDiagnostics::instance().start();
-
     LOG_INFO("AudioEngine: Successfully initialized XAudio2 (48kHz Stereo Float).");
     return true;
 }
 
 void AudioEngine::shutdown() {
     if (!m_initialized) return;
-
-    MediaDiagnostics::instance().stop();
 
     m_running = false;
     m_cv.notify_all();

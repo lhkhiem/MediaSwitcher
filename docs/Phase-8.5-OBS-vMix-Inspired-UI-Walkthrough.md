@@ -12,7 +12,7 @@ PVW                 TAKE / CUT / FADE                 PGM
 INPUTS: [thumbnail input] [thumbnail input] ...       Add Input | Remove | Playlist
 ```
 
-Input bank nằm dưới switcher và hiển thị source dưới dạng tile ngang: thumbnail 16:9, ID, tên file. Click một tile nạp source vào PVW khi không ở Playlist mode. Không tạo OBS playback instance cho từng tile.
+Input bank nằm dưới switcher và hiển thị source dưới dạng tile ngang: thumbnail 16:9, ID, tên file. Click một tile luôn nạp source vào PVW, kể cả khi playlist đang chạy trên PGM. QUICK PLAY, CUT hoặc FADE sẽ dừng playlist trước khi chuyển source theo workflow bình thường. Không tạo OBS playback instance cho từng tile.
 
 ## Add Input và thumbnail
 
@@ -28,7 +28,7 @@ Nút `Playlist` mở cửa sổ riêng, mô phỏng tổ chức vMix:
 Available Inputs  ->  PGM Playlist
 ```
 
-Chọn source ở cột trái rồi nhấn `>` để đưa vào sequence. Có Remove, Up, Down, Loop Playlist, Auto Next, Start và Stop.
+Chọn source ở cột trái rồi nhấn `>` để đưa vào sequence. Có Remove, Up, Down, Loop Playlist, Auto Next, Save và Cancel. Sau khi lưu, thanh INPUTS hiển thị `Play Playlist`; khi đang chạy, nút đổi thành `Stop Playlist` và hai nút Previous/Next chỉ điều khiển playlist.
 
 Playlist chỉ lưu `sourceId`; không có file picker trong playlist. Khi chạy, playlist chỉ đổi PGM. PVW không bị playlist close, seek, pause, preload hoặc đổi source.
 

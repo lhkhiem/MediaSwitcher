@@ -3,6 +3,9 @@
 #include "common/logger/Logger.h"
 
 #include <QCoreApplication>
+#include <QSettings>
+
+#include <algorithm>
 
 extern "C" {
 #include <obs.h>
@@ -11,9 +14,10 @@ extern "C" {
 namespace {
 constexpr uint32_t OBS_WIDTH = 1920;
 constexpr uint32_t OBS_HEIGHT = 1080;
-constexpr uint32_t OBS_FPS = 60;
 constexpr const char* OBS_PLUGIN_BIN_RELATIVE_PATH = "obs-plugins/64bit";
 constexpr const char* OBS_PLUGIN_DATA_RELATIVE_PATH = "data/obs-plugins";
+constexpr const char* OBS_FPS_NUMERATOR_SETTING = "obs/projectFpsNumerator";
+constexpr const char* OBS_FPS_DENOMINATOR_SETTING = "obs/projectFpsDenominator";
 
 void collectModule(void* data, obs_module_t* module) {
     auto* modules = static_cast<std::vector<std::string>*>(data);
@@ -23,12 +27,22 @@ void collectModule(void* data, obs_module_t* module) {
 }
 }
 
+const std::array<ObsVideoFrameRate, 8>& ObsContext::supportedVideoFrameRates() {
+    static const std::array<ObsVideoFrameRate, 8> frameRates{{
+        {24000, 1001}, {24, 1}, {25, 1}, {30000, 1001},
+        {30, 1}, {50, 1}, {60000, 1001}, {60, 1},
+    }};
+    return frameRates;
+}
+
 ObsContext::~ObsContext() {
     shutdown();
 }
 
 bool ObsContext::initialize() {
     if (m_initialized) return true;
+
+    loadVideoFrameRate();
 
     m_runtimeRoot = (std::filesystem::path(QCoreApplication::applicationDirPath().toStdWString()) / ".." / "..").lexically_normal();
     m_moduleConfigPath = m_runtimeRoot / "obs-module-config";
@@ -67,8 +81,8 @@ bool ObsContext::initialize() {
 bool ObsContext::initializeVideo() {
     obs_video_info videoInfo{};
     videoInfo.graphics_module = "libobs-d3d11";
-    videoInfo.fps_num = OBS_FPS;
-    videoInfo.fps_den = 1;
+    videoInfo.fps_num = m_videoFrameRate.numerator;
+    videoInfo.fps_den = m_videoFrameRate.denominator;
     videoInfo.base_width = OBS_WIDTH;
     videoInfo.base_height = OBS_HEIGHT;
     videoInfo.output_width = OBS_WIDTH;
@@ -86,8 +100,51 @@ bool ObsContext::initializeVideo() {
         return false;
     }
 
-    LOG_INFO("OBS: Video initialized: {}x{} @ {}/{} FPS using libobs-d3d11.", OBS_WIDTH, OBS_HEIGHT, OBS_FPS, 1);
+    LOG_INFO("OBS: Video initialized: {}x{} @ {}/{} FPS using libobs-d3d11.", OBS_WIDTH, OBS_HEIGHT,
+             m_videoFrameRate.numerator, m_videoFrameRate.denominator);
     return true;
+}
+
+bool ObsContext::setVideoFrameRate(ObsVideoFrameRate frameRate) {
+    const auto& supported = supportedVideoFrameRates();
+    if (std::find(supported.begin(), supported.end(), frameRate) == supported.end()) {
+        LOG_ERROR("OBS: Rejected unsupported Project FPS {}/{}.", frameRate.numerator, frameRate.denominator);
+        return false;
+    }
+    if (frameRate == m_videoFrameRate) return true;
+
+    const ObsVideoFrameRate previous = m_videoFrameRate;
+    m_videoFrameRate = frameRate;
+    if (m_initialized && !initializeVideo()) {
+        m_videoFrameRate = previous;
+        LOG_ERROR("OBS: Project FPS remains {}/{} after reset failure.", previous.numerator, previous.denominator);
+        return false;
+    }
+
+    saveVideoFrameRate();
+    LOG_INFO("OBS: Project FPS changed to {}/{}.", frameRate.numerator, frameRate.denominator);
+    return true;
+}
+
+void ObsContext::loadVideoFrameRate() {
+    QSettings settings;
+    const ObsVideoFrameRate stored{
+        settings.value(QString::fromLatin1(OBS_FPS_NUMERATOR_SETTING), 60000).toUInt(),
+        settings.value(QString::fromLatin1(OBS_FPS_DENOMINATOR_SETTING), 1001).toUInt(),
+    };
+    const auto& supported = supportedVideoFrameRates();
+    if (std::find(supported.begin(), supported.end(), stored) != supported.end()) {
+        m_videoFrameRate = stored;
+    } else {
+        m_videoFrameRate = {60000, 1001};
+        LOG_WARN("OBS: Ignored invalid saved Project FPS {}/{}; using 60000/1001.", stored.numerator, stored.denominator);
+    }
+}
+
+void ObsContext::saveVideoFrameRate() const {
+    QSettings settings;
+    settings.setValue(QString::fromLatin1(OBS_FPS_NUMERATOR_SETTING), m_videoFrameRate.numerator);
+    settings.setValue(QString::fromLatin1(OBS_FPS_DENOMINATOR_SETTING), m_videoFrameRate.denominator);
 }
 
 bool ObsContext::initializeAudio() {

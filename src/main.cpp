@@ -47,6 +47,14 @@ QString obsPauseSmokeTestPath(const QStringList& arguments) {
     return {};
 }
 
+QString obsFpsSmokeTestPath(const QStringList& arguments) {
+    const QString prefix = QStringLiteral("--obs-fps-smoke-test=");
+    for (const QString& argument : arguments) {
+        if (argument.startsWith(prefix)) return argument.mid(prefix.size());
+    }
+    return {};
+}
+
 void waitForObsLifecycle(int milliseconds) {
     QEventLoop loop;
     QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
@@ -79,6 +87,39 @@ int main(int argc, char* argv[]) {
     const QString mediaTestPath = obsMediaTestPath(QCoreApplication::arguments());
     const QString dualMediaTestPath = obsDualMediaTestPath(QCoreApplication::arguments());
     const QString pauseSmokeTestPath = obsPauseSmokeTestPath(QCoreApplication::arguments());
+    const QString fpsSmokeTestPath = obsFpsSmokeTestPath(QCoreApplication::arguments());
+    if (!fpsSmokeTestPath.isEmpty()) {
+        LOG_INFO("Startup mode: OBS Project FPS smoke test");
+        ObsContext obsContext;
+        if (!obsContext.initialize()) {
+            LOG_ERROR("OBS Project FPS smoke test could not initialize OBS.");
+            return -1;
+        }
+
+        ObsPlaybackBackend preview(obsContext);
+        preview.setAudioOutputEnabled(false);
+        if (!preview.open(std::filesystem::path(fpsSmokeTestPath.toStdWString()), true)) {
+            LOG_ERROR("OBS Project FPS smoke test could not open the media file.");
+            return -1;
+        }
+
+        waitForObsLifecycle(250);
+        const ObsVideoFrameRate original = obsContext.videoFrameRate();
+        bool passed = true;
+        for (const ObsVideoFrameRate frameRate : ObsContext::supportedVideoFrameRates()) {
+            if (!obsContext.setVideoFrameRate(frameRate)) {
+                passed = false;
+                break;
+            }
+            waitForObsLifecycle(50);
+        }
+        if (!obsContext.setVideoFrameRate(original)) passed = false;
+        LOG_INFO("OBS Project FPS smoke: tested {} preset(s) with active media; result={}",
+                 ObsContext::supportedVideoFrameRates().size(), passed ? "PASS" : "FAIL");
+        preview.close();
+        return passed ? 0 : 1;
+    }
+
     if (!dualMediaTestPath.isEmpty()) {
         LOG_INFO("Startup mode: OBS dual media test");
         LOG_INFO("OBS compiled: yes");

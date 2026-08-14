@@ -80,7 +80,7 @@ Build ON thanh cong voi runtime `D:\deps\obs-runtime`.
 
 ```text
 OBS: libobs startup succeeded. Version: 32.1.2.
-OBS: Video initialized: 1920x1080 @ 60/1 FPS using libobs-d3d11.
+OBS: Video initialized: 1920x1080 @ 60000/1001 FPS using libobs-d3d11.
 OBS: Audio core initialized: 48000 Hz stereo.
 OBS: Loaded module 'obs-ffmpeg.dll'.
 OBS: Foundation initialized successfully. Loaded 1 module(s).

@@ -3,6 +3,7 @@
 
 #include "common/logger/Logger.h"
 #include "engine/input/ThumbnailGenerator.h"
+#include "engine/obs/ObsContext.h"
 #include "engine/obs/ObsPlaybackBackend.h"
 #include "engine/obs/ObsPlaylist.h"
 #include "engine/obs/ObsSourceCatalog.h"
@@ -43,6 +44,7 @@ extern "C" {
 #include <QSizePolicy>
 #include <QStackedLayout>
 #include <QScreen>
+#include <QSignalBlocker>
 #include <QStyle>
 #include <QTimer>
 #include <QToolButton>
@@ -253,10 +255,24 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     QAction* addRtspAction = addMenu->addAction(QStringLiteral("Network stream (RTSP)..."));
     m_addSourceButton->setMenu(addMenu);
     m_openPlaylistButton = new QPushButton(QStringLiteral("Playlist"), inputBank);
+    m_playlistPreviousButton = new QPushButton(inputBank);
+    m_playlistPreviousButton->setIcon(style()->standardIcon(QStyle::SP_MediaSkipBackward));
+    m_playlistPreviousButton->setFixedSize(30, 30);
+    m_playlistPreviousButton->setToolTip(QStringLiteral("Previous Playlist"));
+    m_playlistPreviousButton->setAccessibleName(QStringLiteral("Previous Playlist"));
+    m_playlistPreviousButton->hide();
+    m_playlistNextButton = new QPushButton(inputBank);
+    m_playlistNextButton->setIcon(style()->standardIcon(QStyle::SP_MediaSkipForward));
+    m_playlistNextButton->setFixedSize(30, 30);
+    m_playlistNextButton->setToolTip(QStringLiteral("Next Playlist"));
+    m_playlistNextButton->setAccessibleName(QStringLiteral("Next Playlist"));
+    m_playlistNextButton->hide();
     auto* typeLabel = new QLabel(QStringLiteral("Type"), inputBank);
     typeLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
     auto* sizeLabel = new QLabel(QStringLiteral("Size"), inputBank);
     sizeLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
+    auto* fpsLabel = new QLabel(QStringLiteral("FPS"), inputBank);
+    fpsLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
     m_catalogThumbnailSize = new QComboBox(inputBank);
     m_catalogThumbnailSize->addItem(QStringLiteral("Small"), 110);
     m_catalogThumbnailSize->addItem(QStringLiteral("Normal"), 192);
@@ -269,12 +285,30 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     m_sourceTypeFilter->addItem(QStringLiteral("Images"), static_cast<int>(ObsCatalogSourceType::ImageFile));
     m_sourceTypeFilter->addItem(QStringLiteral("RTSP cameras"), static_cast<int>(ObsCatalogSourceType::RtspCamera));
     m_sourceTypeFilter->addItem(QStringLiteral("Blank"), static_cast<int>(ObsCatalogSourceType::ColorBlank));
+    m_projectFrameRate = new QComboBox(inputBank);
+    m_projectFrameRate->setFixedWidth(88);
+    const QStringList frameRateLabels{
+        QStringLiteral("23.976"), QStringLiteral("24"), QStringLiteral("25"), QStringLiteral("29.97"),
+        QStringLiteral("30"), QStringLiteral("50"), QStringLiteral("59.94"), QStringLiteral("60"),
+    };
+    const auto& frameRates = ObsContext::supportedVideoFrameRates();
+    const ObsVideoFrameRate currentFrameRate = m_context.videoFrameRate();
+    for (size_t index = 0; index < frameRates.size(); ++index) {
+        m_projectFrameRate->addItem(frameRateLabels.at(static_cast<int>(index)), frameRates[index].numerator);
+        m_projectFrameRate->setItemData(static_cast<int>(index), frameRates[index].denominator, Qt::UserRole + 1);
+        if (frameRates[index] == currentFrameRate) m_projectFrameRate->setCurrentIndex(static_cast<int>(index));
+    }
+    m_projectFrameRate->setToolTip(QStringLiteral("Project FPS cho toàn bộ PVW, PGM và output"));
     inputToolbar->addWidget(m_addSourceButton);
     inputToolbar->addWidget(m_openPlaylistButton);
+    inputToolbar->addWidget(m_playlistPreviousButton);
+    inputToolbar->addWidget(m_playlistNextButton);
     inputToolbar->addWidget(typeLabel);
     inputToolbar->addWidget(m_sourceTypeFilter);
     inputToolbar->addWidget(sizeLabel);
     inputToolbar->addWidget(m_catalogThumbnailSize);
+    inputToolbar->addWidget(fpsLabel);
+    inputToolbar->addWidget(m_projectFrameRate);
     inputBankLayout->addLayout(inputToolbar);
     m_sourceCatalogList = new QListWidget(inputBank);
     m_sourceCatalogList->setViewMode(QListView::IconMode);
@@ -300,14 +334,29 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     connect(addMediaAction, &QAction::triggered, this, [this] { addCatalogFiles(-1); });
     connect(addImageAction, &QAction::triggered, this, [this] { addCatalogFiles(static_cast<int>(ObsCatalogSourceType::ImageFile)); });
     connect(addRtspAction, &QAction::triggered, this, &ObsDualMediaTestWindow::addRtspSource);
-    connect(m_openPlaylistButton, &QPushButton::clicked, this, &ObsDualMediaTestWindow::showPlaylistManager);
+    connect(m_openPlaylistButton, &QPushButton::clicked, this, [this] {
+        if (m_playlistMode) {
+            stopPlaylist();
+        } else if (!m_playlist->empty()) {
+            startPlaylist();
+        } else {
+            showPlaylistManager();
+        }
+    });
+    connect(m_playlistPreviousButton, &QPushButton::clicked, this, [this] {
+        navigatePlaylist(false, "Previous");
+    });
+    connect(m_playlistNextButton, &QPushButton::clicked, this, [this] {
+        navigatePlaylist(true, "Next");
+    });
     connect(m_catalogThumbnailSize, &QComboBox::currentIndexChanged, this, [this](int) {
         setCatalogThumbnailSize(m_catalogThumbnailSize->currentData().toInt());
     });
     connect(m_sourceTypeFilter, &QComboBox::currentIndexChanged, this, [this](int) { refreshCatalogUi(); });
+    connect(m_projectFrameRate, &QComboBox::currentIndexChanged, this, &ObsDualMediaTestWindow::setProjectFrameRate);
     connect(m_sourceCatalogList, &QListWidget::itemClicked, this, [this](QListWidgetItem* item) {
         const auto source = m_sourceCatalog->find(item->data(Qt::UserRole).toULongLong());
-        if (!source || m_playlistMode || m_fadeActive) return;
+        if (!source || m_fadeActive) return;
         stagePreviewSource(*source);
     });
 
@@ -323,6 +372,7 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     const uint64_t previewBlankId = m_sourceCatalog->addSystemBlank("Blank 1");
     const uint64_t programBlankId = m_sourceCatalog->addSystemBlank("Blank 2");
     refreshCatalogUi();
+    refreshPlaylistButtonUi();
     connect(&ThumbnailGenerator::instance(), &ThumbnailGenerator::thumbnailReady, this, [this](int sourceId, const QImage& image) {
         if (!m_sourceCatalog->find(static_cast<uint64_t>(sourceId))) return;
         const uint64_t id = static_cast<uint64_t>(sourceId);
@@ -1061,6 +1111,8 @@ bool ObsDualMediaTestWindow::promotePreviewToProgram(const char* operation) {
         return false;
     }
 
+    if (m_playlistMode) stopPlaylist();
+
     const bool shouldSwap = std::string_view(operation) == "CUT";
     rememberProgramSnapshot(outgoing);
 
@@ -1114,6 +1166,7 @@ bool ObsDualMediaTestWindow::fadePreviewToProgram() {
         LOG_ERROR("OBS dual media: FADE rejected because the PVW cue is unavailable.");
         return false;
     }
+    if (m_playlistMode) stopPlaylist();
     const uint32_t duration = static_cast<uint32_t>(m_fadeDuration->currentData().toUInt());
     rememberProgramSnapshot(outgoingSnapshot);
 
@@ -1485,33 +1538,42 @@ void ObsDualMediaTestWindow::addSelectedCatalogSourceToPlaylist() {
 
 void ObsDualMediaTestWindow::removeSelectedPlaylistStep() {
     const int row = m_playlistList->currentRow();
-    if (row >= 0) m_playlist->removeAt(static_cast<size_t>(row));
+    if (row >= 0 && static_cast<size_t>(row) < m_playlistDraft.size()) {
+        m_playlistDraft.erase(m_playlistDraft.begin() + row);
+    }
     refreshPlaylistUi();
 }
 
 void ObsDualMediaTestWindow::movePlaylistStep(int delta) {
     const int row = m_playlistList->currentRow();
     const int target = row + delta;
-    if (row < 0 || target < 0 || target >= static_cast<int>(m_playlist->size())) return;
-    if (m_playlist->move(static_cast<size_t>(row), static_cast<size_t>(target))) {
-        refreshPlaylistUi();
-        m_playlistList->setCurrentRow(target);
-    }
+    if (row < 0 || target < 0 || target >= static_cast<int>(m_playlistDraft.size())) return;
+    std::iter_swap(m_playlistDraft.begin() + row, m_playlistDraft.begin() + target);
+    refreshPlaylistUi();
+    m_playlistList->setCurrentRow(target);
 }
 
 bool ObsDualMediaTestWindow::startPlaylist() {
     if (m_playlist->empty() || m_fadeActive) return false;
-    m_playlist->setLoop(m_playlistLoop->isChecked());
-    m_playlist->setAutoNext(m_autoNext->isChecked());
+    if (m_playlistLoop) m_playlist->setLoop(m_playlistLoop->isChecked());
+    if (m_autoNext) m_playlist->setAutoNext(m_autoNext->isChecked());
     m_playlistMode = true;
-    return activatePlaylistProgram("Start");
+    refreshPlaylistButtonUi();
+    if (!activatePlaylistProgram("Start")) {
+        m_playlistMode = false;
+        refreshPlaylistButtonUi();
+        return false;
+    }
+    return true;
 }
 
 void ObsDualMediaTestWindow::stopPlaylist() {
     if (!m_playlistMode) return;
     m_playlistMode = false;
+    if (m_program.backend && m_program.backend->supportsTransport()) m_program.backend->pause();
+    refreshPlaylistButtonUi();
     refreshPlaylistUi();
-    LOG_INFO("OBS playlist: stopped; PVW remains untouched.");
+    LOG_INFO("OBS playlist: stopped; PGM paused in place and PVW remains untouched.");
 }
 
 bool ObsDualMediaTestWindow::activatePlaylistProgram(const char* reason) {
@@ -1561,7 +1623,7 @@ void ObsDualMediaTestWindow::refreshCatalogUi() {
         item->setToolTip(source.type == ObsCatalogSourceType::RtspCamera ? QString::fromUtf8(source.endpoint.c_str()) : info.absoluteFilePath());
         auto* tile = new CatalogTileWidget([this, item, source] {
             m_sourceCatalogList->setCurrentItem(item);
-            if (!m_playlistMode && !m_fadeActive) stagePreviewSource(source);
+            if (!m_fadeActive) stagePreviewSource(source);
         }, m_sourceCatalogList);
         tile->setFixedSize(itemSize);
         const bool isProgram = source.id == m_programSourceId && m_program.backend && m_program.backend->isOpen();
@@ -1642,6 +1704,31 @@ void ObsDualMediaTestWindow::setCatalogThumbnailSize(int width) {
     refreshCatalogUi();
 }
 
+void ObsDualMediaTestWindow::setProjectFrameRate(int index) {
+    if (!m_projectFrameRate || index < 0) return;
+
+    const ObsVideoFrameRate requested{
+        m_projectFrameRate->itemData(index, Qt::UserRole).toUInt(),
+        m_projectFrameRate->itemData(index, Qt::UserRole + 1).toUInt(),
+    };
+    if (m_context.setVideoFrameRate(requested)) {
+        resizeDisplay(m_preview);
+        resizeDisplay(m_program);
+        LOG_INFO("OBS app: Project FPS selected: {}/{}.", requested.numerator, requested.denominator);
+        return;
+    }
+
+    const ObsVideoFrameRate active = m_context.videoFrameRate();
+    const auto& frameRates = ObsContext::supportedVideoFrameRates();
+    const auto activeIt = std::find(frameRates.begin(), frameRates.end(), active);
+    const QSignalBlocker blocker(m_projectFrameRate);
+    if (activeIt != frameRates.end()) {
+        m_projectFrameRate->setCurrentIndex(static_cast<int>(std::distance(frameRates.begin(), activeIt)));
+    }
+    QMessageBox::warning(this, QStringLiteral("Project FPS"),
+                         QStringLiteral("Không thể đổi FPS khi OBS đang có output hoạt động."));
+}
+
 void ObsDualMediaTestWindow::setProgramSourceId(uint64_t sourceId) {
     m_programSourceId = sourceId;
     const auto source = m_sourceCatalog ? m_sourceCatalog->find(sourceId) : std::nullopt;
@@ -1653,19 +1740,69 @@ void ObsDualMediaTestWindow::setProgramSourceId(uint64_t sourceId) {
     refreshCatalogUi();
 }
 
+void ObsDualMediaTestWindow::refreshPlaylistButtonUi() {
+    if (!m_openPlaylistButton || !m_playlist) return;
+
+    const bool hasPlaylist = !m_playlist->empty();
+    const bool canNavigate = hasPlaylist && m_playlistMode && !m_fadeActive && m_playlist->size() > 1;
+    if (m_playlistPreviousButton) {
+        m_playlistPreviousButton->setVisible(hasPlaylist && m_playlistMode);
+        m_playlistPreviousButton->setEnabled(canNavigate &&
+            (m_playlist->isLooping() || m_playlist->currentIndex() > 0));
+    }
+    if (m_playlistNextButton) {
+        m_playlistNextButton->setVisible(hasPlaylist && m_playlistMode);
+        m_playlistNextButton->setEnabled(canNavigate &&
+            (m_playlist->isLooping() || m_playlist->currentIndex() + 1 < m_playlist->size()));
+    }
+
+    if (m_playlistMode) {
+        m_openPlaylistButton->setText(QStringLiteral("Stop Playlist"));
+        m_openPlaylistButton->setStyleSheet(QStringLiteral(
+            "QPushButton { background: #9f2636; color: #ffffff; border: 1px solid #ff8794; font-weight: bold; }"
+            "QPushButton:hover { background: #c43146; }"
+            "QPushButton:pressed { background: #7e1d2b; }"));
+        return;
+    }
+
+    if (!m_playlist->empty()) {
+        m_openPlaylistButton->setText(QStringLiteral("Play Playlist"));
+        m_openPlaylistButton->setStyleSheet(QStringLiteral(
+            "QPushButton { background: #168044; color: #ffffff; border: 1px solid #55c47f; font-weight: bold; }"
+            "QPushButton:hover { background: #1b9952; }"
+            "QPushButton:pressed { background: #106934; }"));
+        return;
+    }
+
+    m_openPlaylistButton->setText(QStringLiteral("Playlist"));
+    m_openPlaylistButton->setStyleSheet(QString());
+}
+
 void ObsDualMediaTestWindow::refreshPlaylistUi() {
-    if (!m_playlistList) return;
+    refreshPlaylistButtonUi();
+    if (!m_playlistList || !m_playlistStatus) return;
+
+    const bool editing = m_playlistEditing && !m_playlistMode;
+    const size_t itemCount = editing ? m_playlistDraft.size() : m_playlist->size();
+
     m_playlistList->clear();
-    for (size_t index = 0; index < m_playlist->size(); ++index) {
-        const auto source = m_sourceCatalog->find(m_playlist->sourceIdAt(index));
+    for (size_t index = 0; index < itemCount; ++index) {
+        const uint64_t sourceId = editing ? m_playlistDraft[index] : m_playlist->sourceIdAt(index);
+        const auto source = m_sourceCatalog->find(sourceId);
         const QString name = source ? catalogSourceName(*source) : QStringLiteral("Missing source");
         auto* item = new QListWidgetItem(QStringLiteral("%1. %2").arg(index + 1).arg(name), m_playlistList);
         if (m_playlistMode && index == m_playlist->currentIndex()) item->setText(item->text() + QStringLiteral("  [PGM]"));
     }
-    m_playlistStatus->setText(m_playlist->empty() ? QStringLiteral("Playlist: Empty")
-        : QStringLiteral("Playlist: %1 | PGM-only %2/%3")
-            .arg(m_playlistMode ? QStringLiteral("Running") : QStringLiteral("Ready"))
-            .arg(m_playlist->currentIndex() + 1).arg(m_playlist->size()));
+
+    if (editing) {
+        m_playlistStatus->setText(itemCount == 0 ? QStringLiteral("Playlist: Empty")
+            : QStringLiteral("Playlist: Editing | %1 item(s)").arg(itemCount));
+    } else {
+        m_playlistStatus->setText(m_playlist->empty() ? QStringLiteral("Playlist: Empty")
+            : QStringLiteral("Playlist: %1 | PGM-only %2/%3")
+                .arg(m_playlistMode ? QStringLiteral("Running") : QStringLiteral("Ready"))
+                .arg(m_playlist->currentIndex() + 1).arg(m_playlist->size()));
+    }
 }
 
 void ObsDualMediaTestWindow::showPlaylistManager() {
@@ -1711,33 +1848,47 @@ void ObsDualMediaTestWindow::showPlaylistManager() {
         m_playlistLoop->setChecked(m_playlist->isLooping());
         m_autoNext->setChecked(m_playlist->isAutoNext());
         m_playlistStatus = new QLabel(m_playlistDialog);
-        auto* start = new QPushButton(QStringLiteral("Start"), m_playlistDialog);
-        auto* stop = new QPushButton(QStringLiteral("Stop"), m_playlistDialog);
+        m_playlistSaveButton = new QPushButton(QStringLiteral("Save"), m_playlistDialog);
+        m_playlistCancelButton = new QPushButton(QStringLiteral("Cancel"), m_playlistDialog);
         footer->addWidget(m_playlistLoop);
         footer->addWidget(m_autoNext);
         footer->addWidget(m_playlistStatus, 1);
-        footer->addWidget(start);
-        footer->addWidget(stop);
+        footer->addWidget(m_playlistSaveButton);
+        footer->addWidget(m_playlistCancelButton);
         layout->addLayout(footer);
 
         connect(add, &QPushButton::clicked, this, [this, available] {
             const auto* item = available->currentItem();
             if (!item) return;
-            m_playlist->addSource(item->data(Qt::UserRole).toULongLong());
+            m_playlistDraft.push_back(item->data(Qt::UserRole).toULongLong());
             refreshPlaylistUi();
         });
         connect(remove, &QPushButton::clicked, this, &ObsDualMediaTestWindow::removeSelectedPlaylistStep);
         connect(up, &QPushButton::clicked, this, [this] { movePlaylistStep(-1); });
         connect(down, &QPushButton::clicked, this, [this] { movePlaylistStep(1); });
-        connect(start, &QPushButton::clicked, this, &ObsDualMediaTestWindow::startPlaylist);
-        connect(stop, &QPushButton::clicked, this, &ObsDualMediaTestWindow::stopPlaylist);
-        connect(m_playlistLoop, &QCheckBox::toggled, this, [this](bool enabled) { m_playlist->setLoop(enabled); refreshPlaylistUi(); });
-        connect(m_autoNext, &QCheckBox::toggled, this, [this](bool enabled) { m_playlist->setAutoNext(enabled); refreshPlaylistUi(); });
+        connect(m_playlistSaveButton, &QPushButton::clicked, this, &ObsDualMediaTestWindow::savePlaylistManager);
+        connect(m_playlistCancelButton, &QPushButton::clicked, this, &ObsDualMediaTestWindow::cancelPlaylistManager);
+        connect(m_playlistDialog, &QDialog::rejected, this, &ObsDualMediaTestWindow::cancelPlaylistManager);
+        connect(m_playlistLoop, &QCheckBox::toggled, this, [this](bool) { refreshPlaylistUi(); });
+        connect(m_autoNext, &QCheckBox::toggled, this, [this](bool) { refreshPlaylistUi(); });
+    }
+
+    m_playlistDraft.clear();
+    for (size_t index = 0; index < m_playlist->size(); ++index) m_playlistDraft.push_back(m_playlist->sourceIdAt(index));
+    m_playlistEditing = true;
+    if (m_playlistLoop) {
+        const QSignalBlocker blocker(m_playlistLoop);
+        m_playlistLoop->setChecked(m_playlist->isLooping());
+    }
+    if (m_autoNext) {
+        const QSignalBlocker blocker(m_autoNext);
+        m_autoNext->setChecked(m_playlist->isAutoNext());
     }
 
     auto* available = m_playlistDialog->findChild<QListWidget*>(QStringLiteral("playlistAvailableInputs"));
     available->clear();
     for (const auto& source : m_sourceCatalog->sources()) {
+        if (!obsCatalogSourceHasTimeline(source.type)) continue;
         const QFileInfo info(QString::fromStdWString(source.path.wstring()));
         auto* item = new QListWidgetItem(QStringLiteral("#%1  %2").arg(source.id).arg(info.fileName()), available);
         item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(source.id));
@@ -1746,6 +1897,27 @@ void ObsDualMediaTestWindow::showPlaylistManager() {
     m_playlistDialog->show();
     m_playlistDialog->raise();
     m_playlistDialog->activateWindow();
+}
+
+void ObsDualMediaTestWindow::savePlaylistManager() {
+    if (!m_playlist) return;
+    m_playlist->clear();
+    for (const uint64_t sourceId : m_playlistDraft) m_playlist->addSource(sourceId);
+    if (m_playlistLoop) m_playlist->setLoop(m_playlistLoop->isChecked());
+    if (m_autoNext) m_playlist->setAutoNext(m_autoNext->isChecked());
+    m_playlistDraft.clear();
+    m_playlistEditing = false;
+    if (m_playlistDialog) m_playlistDialog->hide();
+    refreshPlaylistUi();
+    LOG_INFO("OBS playlist: saved {} step(s); playback remains stopped until Play Playlist is pressed.", m_playlist->size());
+}
+
+void ObsDualMediaTestWindow::cancelPlaylistManager() {
+    m_playlistDraft.clear();
+    m_playlistEditing = false;
+    if (m_playlistDialog) m_playlistDialog->hide();
+    refreshPlaylistUi();
+    LOG_INFO("OBS playlist: edit cancelled.");
 }
 
 void ObsDualMediaTestWindow::toggleFullscreen() {

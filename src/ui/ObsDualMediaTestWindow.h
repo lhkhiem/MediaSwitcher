@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 class QLabel;
 class QImage;
@@ -152,9 +153,13 @@ private:
     bool navigatePlaylist(bool forward, const char* reason);
     void refreshCatalogUi();
     void setCatalogThumbnailSize(int width);
+    void setProjectFrameRate(int index);
     void setProgramSourceId(uint64_t sourceId);
+    void refreshPlaylistButtonUi();
     void refreshPlaylistUi();
     void showPlaylistManager();
+    void savePlaylistManager();
+    void cancelPlaylistManager();
     void toggleFullscreen();
     void toggleProgramOutputFullscreen();
     void closePanels();
@@ -175,12 +180,15 @@ private:
     QPushButton* m_openPlaylistButton{nullptr};
     QComboBox* m_catalogThumbnailSize{nullptr};
     QComboBox* m_sourceTypeFilter{nullptr};
+    QComboBox* m_projectFrameRate{nullptr};
     QPushButton* m_playlistPreviousButton{nullptr};
     QPushButton* m_playlistNextButton{nullptr};
     QComboBox* m_fadeDuration{nullptr};
     QCheckBox* m_playlistLoop{nullptr};
     QCheckBox* m_autoNext{nullptr};
     QLabel* m_playlistStatus{nullptr};
+    QPushButton* m_playlistSaveButton{nullptr};
+    QPushButton* m_playlistCancelButton{nullptr};
     QListWidget* m_sourceCatalogList{nullptr};
     QListWidget* m_playlistList{nullptr};
     QDialog* m_playlistDialog{nullptr};
@@ -202,5 +210,7 @@ private:
     bool m_fadeActive{false};
     bool m_fadeCleanupQueued{false};
     bool m_playlistMode{false};
+    bool m_playlistEditing{false};
+    std::vector<uint64_t> m_playlistDraft;
     PlaybackSnapshot m_fadeOutgoingSnapshot;
 };

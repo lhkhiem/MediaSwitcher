@@ -23,6 +23,7 @@ class QStackedLayout;
 class QTimer;
 class ObsContext;
 class ObsPlaybackBackend;
+enum class ObsRenderMode;
 class ObsPlaylist;
 class ObsSourceCatalog;
 class ObsProgramOutputWindow;
@@ -56,6 +57,8 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
+    enum class UiLanguage { Vietnamese, English };
+
     struct Panel {
         ObsDualMediaTestWindow* owner{nullptr};
         std::unique_ptr<ObsPlaybackBackend> backend;
@@ -116,6 +119,10 @@ private:
     void updateMonitorLayout();
     void updatePanel(Panel& panel, const QString& role);
     void updateProcessMetrics();
+    QString localized(const char* vietnamese, const char* english) const;
+    void bindLocalizedProperty(QObject* object, const char* propertyName, const char* vietnamese, const char* english);
+    void applyLanguage();
+    void setLanguage(int index);
     bool openCatalogSource(ObsPlaybackBackend& backend, uint64_t sourceId, bool startPaused = false);
     void stagePreviewSource(const ObsCatalogSource& source);
     void stagePreviewAtPosition(const std::filesystem::path& path, uint64_t sourceId, int64_t positionMs);
@@ -155,6 +162,7 @@ private:
     void refreshCatalogUi();
     void setCatalogThumbnailSize(int width);
     void setProjectFrameRate(int index);
+    void setProgramRenderMode(int index);
     void setProgramSourceId(uint64_t sourceId);
     void refreshPlaylistButtonUi();
     void refreshPlaylistUi();
@@ -184,6 +192,8 @@ private:
     QComboBox* m_catalogThumbnailSize{nullptr};
     QComboBox* m_sourceTypeFilter{nullptr};
     QComboBox* m_projectFrameRate{nullptr};
+    QComboBox* m_programRenderMode{nullptr};
+    QComboBox* m_languageSelector{nullptr};
     QPushButton* m_playlistPreviousButton{nullptr};
     QPushButton* m_playlistNextButton{nullptr};
     QComboBox* m_fadeDuration{nullptr};
@@ -214,6 +224,8 @@ private:
     bool m_fadeCleanupQueued{false};
     bool m_playlistMode{false};
     bool m_playlistEditing{false};
+    UiLanguage m_language{UiLanguage::Vietnamese};
+    ObsRenderMode m_selectedProgramRenderMode;
     std::vector<uint64_t> m_playlistDraft;
     PlaybackSnapshot m_fadeOutgoingSnapshot;
 };

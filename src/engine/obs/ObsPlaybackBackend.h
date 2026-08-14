@@ -18,6 +18,11 @@ enum class ObsPlaybackState {
     None, Opening, Buffering, Playing, Paused, Stopped, Ended, Error,
 };
 
+enum class ObsRenderMode {
+    AspectFit,
+    FitToScreen,
+};
+
 class ObsPlaybackBackend final {
 public:
     explicit ObsPlaybackBackend(ObsContext& context);
@@ -54,6 +59,8 @@ public:
     obs_source_t* nativeSource() const { return m_source; }
     void setRenderSource(obs_source_t* source);
     void resetRenderSource();
+    void setRenderMode(ObsRenderMode mode) { m_renderMode.store(mode); }
+    ObsRenderMode renderMode() const { return m_renderMode.load(); }
     void render(uint32_t width, uint32_t height) const;
     void logDiagnostics() const;
 
@@ -90,4 +97,5 @@ private:
     std::atomic_int m_pendingSeekAttempts{0};
     std::atomic<float> m_leftAudioPeak{0.0f};
     std::atomic<float> m_rightAudioPeak{0.0f};
+    std::atomic<ObsRenderMode> m_renderMode{ObsRenderMode::AspectFit};
 };

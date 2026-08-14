@@ -45,6 +45,7 @@ extern "C" {
 #include <QSizePolicy>
 #include <QStackedLayout>
 #include <QScreen>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QTimer>
@@ -122,7 +123,10 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, QWidget* par
     : ObsDualMediaTestWindow(context, std::filesystem::path{}, parent) {}
 
 ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::filesystem::path& mediaPath, QWidget* parent)
-    : QWidget(parent), m_context(context) {
+    : QWidget(parent), m_context(context), m_selectedProgramRenderMode(ObsRenderMode::AspectFit) {
+    const QSettings settings;
+    m_language = settings.value(QStringLiteral("ui/language"), QStringLiteral("vi")).toString() == QStringLiteral("en")
+        ? UiLanguage::English : UiLanguage::Vietnamese;
     setWindowTitle(QStringLiteral("MediaSwitcher OBS"));
     resize(1280, 720);
     setMinimumSize(760, 500);
@@ -177,7 +181,10 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     m_cutButton->setText(QStringLiteral("CUT"));
     m_fadeButton->setText(QStringLiteral("FADE"));
     m_fullscreenButton = new QPushButton(QStringLiteral("FULL SCREEN"), transitionWidget);
-    m_fullscreenButton->setToolTip(QStringLiteral("Mở output PGM toàn màn hình trên màn hình thứ hai"));
+    bindLocalizedProperty(m_fullscreenButton, "text", "TOÀN MÀN HÌNH", "FULL SCREEN");
+    bindLocalizedProperty(m_fullscreenButton, "toolTip",
+                          "Mở output PGM toàn màn hình trên màn hình thứ hai",
+                          "Open the PGM output fullscreen on the second display");
     transitionControls->addWidget(m_fullscreenButton);
     transitionControls->addSpacing(4);
     transitionControls->addWidget(m_quickPlayButton);
@@ -245,15 +252,20 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     inputBankLayout->setSpacing(6);
     auto* inputToolbar = new QHBoxLayout();
     auto* inputTitle = new QLabel(QStringLiteral("INPUTS"), inputBank);
+    bindLocalizedProperty(inputTitle, "text", "NGUỒN VÀO", "INPUTS");
     inputTitle->setStyleSheet(QStringLiteral("color: #dce7ee; font-weight: bold; letter-spacing: 0px; border: 0;"));
     inputToolbar->addWidget(inputTitle);
     inputToolbar->addStretch();
     m_addSourceButton = new QPushButton(QStringLiteral("Add Input"), inputBank);
+    bindLocalizedProperty(m_addSourceButton, "text", "Thêm nguồn", "Add Input");
     auto* addMenu = new QMenu(m_addSourceButton);
     QAction* addMediaAction = addMenu->addAction(QStringLiteral("Video files..."));
     QAction* addImageAction = addMenu->addAction(QStringLiteral("Image files..."));
     addMenu->addSeparator();
     QAction* addRtspAction = addMenu->addAction(QStringLiteral("Network stream (RTSP)..."));
+    bindLocalizedProperty(addMediaAction, "text", "Tệp video/âm thanh...", "Video/audio files...");
+    bindLocalizedProperty(addImageAction, "text", "Tệp hình ảnh...", "Image files...");
+    bindLocalizedProperty(addRtspAction, "text", "Luồng mạng (RTSP)...", "Network stream (RTSP)...");
     m_addSourceButton->setMenu(addMenu);
     m_openPlaylistButton = new QPushButton(QStringLiteral("Playlist"), inputBank);
     m_playlistPreviousButton = new QPushButton(inputBank);
@@ -261,19 +273,27 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     m_playlistPreviousButton->setFixedSize(30, 30);
     m_playlistPreviousButton->setToolTip(QStringLiteral("Previous Playlist"));
     m_playlistPreviousButton->setAccessibleName(QStringLiteral("Previous Playlist"));
+    bindLocalizedProperty(m_playlistPreviousButton, "toolTip", "Mục Playlist trước", "Previous Playlist item");
+    bindLocalizedProperty(m_playlistPreviousButton, "accessibleName", "Mục Playlist trước", "Previous Playlist item");
     m_playlistPreviousButton->hide();
     m_playlistNextButton = new QPushButton(inputBank);
     m_playlistNextButton->setIcon(style()->standardIcon(QStyle::SP_MediaSkipForward));
     m_playlistNextButton->setFixedSize(30, 30);
     m_playlistNextButton->setToolTip(QStringLiteral("Next Playlist"));
     m_playlistNextButton->setAccessibleName(QStringLiteral("Next Playlist"));
+    bindLocalizedProperty(m_playlistNextButton, "toolTip", "Mục Playlist tiếp theo", "Next Playlist item");
+    bindLocalizedProperty(m_playlistNextButton, "accessibleName", "Mục Playlist tiếp theo", "Next Playlist item");
     m_playlistNextButton->hide();
     auto* typeLabel = new QLabel(QStringLiteral("Type"), inputBank);
+    bindLocalizedProperty(typeLabel, "text", "Loại", "Type");
     typeLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
     auto* sizeLabel = new QLabel(QStringLiteral("Size"), inputBank);
+    bindLocalizedProperty(sizeLabel, "text", "Cỡ", "Size");
     sizeLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
     auto* fpsLabel = new QLabel(QStringLiteral("FPS"), inputBank);
     fpsLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
+    auto* pgmViewLabel = new QLabel(QStringLiteral("PGM"), inputBank);
+    pgmViewLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
     m_catalogThumbnailSize = new QComboBox(inputBank);
     m_catalogThumbnailSize->addItem(QStringLiteral("Small"), 110);
     m_catalogThumbnailSize->addItem(QStringLiteral("Normal"), 192);
@@ -300,6 +320,26 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
         if (frameRates[index] == currentFrameRate) m_projectFrameRate->setCurrentIndex(static_cast<int>(index));
     }
     m_projectFrameRate->setToolTip(QStringLiteral("Project FPS cho toàn bộ PVW, PGM và output"));
+    m_programRenderMode = new QComboBox(inputBank);
+    m_programRenderMode->setFixedWidth(88);
+    m_programRenderMode->addItem(QStringLiteral("Default"), static_cast<int>(ObsRenderMode::AspectFit));
+    m_programRenderMode->addItem(QStringLiteral("Fit"), static_cast<int>(ObsRenderMode::FitToScreen));
+    m_programRenderMode->setToolTip(QStringLiteral(
+        "Default: giữ tỷ lệ hiển thị nguyên bản. Fit: kéo hình vừa toàn bộ màn hình."));
+    bindLocalizedProperty(m_programRenderMode, "toolTip",
+                          "Mặc định: giữ tỷ lệ hiển thị nguyên bản. Vừa màn hình: kéo hình phủ toàn bộ màn hình.",
+                          "Default: preserve the original aspect ratio. Fit: stretch to fill the entire screen.");
+    connect(m_programRenderMode, &QComboBox::currentIndexChanged,
+            this, &ObsDualMediaTestWindow::setProgramRenderMode);
+    auto* languageLabel = new QLabel(QStringLiteral("LANG"), inputBank);
+    bindLocalizedProperty(languageLabel, "text", "NGÔN NGỮ", "LANG");
+    languageLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
+    m_languageSelector = new QComboBox(inputBank);
+    m_languageSelector->setFixedWidth(58);
+    m_languageSelector->addItem(QStringLiteral("VN"), QStringLiteral("vi"));
+    m_languageSelector->addItem(QStringLiteral("EN"), QStringLiteral("en"));
+    m_languageSelector->setCurrentIndex(m_language == UiLanguage::Vietnamese ? 0 : 1);
+    connect(m_languageSelector, &QComboBox::currentIndexChanged, this, &ObsDualMediaTestWindow::setLanguage);
     inputToolbar->addWidget(m_addSourceButton);
     inputToolbar->addWidget(m_openPlaylistButton);
     inputToolbar->addWidget(m_playlistPreviousButton);
@@ -310,6 +350,10 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     inputToolbar->addWidget(m_catalogThumbnailSize);
     inputToolbar->addWidget(fpsLabel);
     inputToolbar->addWidget(m_projectFrameRate);
+    inputToolbar->addWidget(pgmViewLabel);
+    inputToolbar->addWidget(m_programRenderMode);
+    inputToolbar->addWidget(languageLabel);
+    inputToolbar->addWidget(m_languageSelector);
     inputBankLayout->addLayout(inputToolbar);
     m_sourceCatalogList = new QListWidget(inputBank);
     m_sourceCatalogList->setViewMode(QListView::IconMode);
@@ -376,6 +420,7 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
 
     m_preview.backend = std::make_unique<ObsPlaybackBackend>(context);
     m_program.backend = std::make_unique<ObsPlaybackBackend>(context);
+    m_program.backend->setRenderMode(m_selectedProgramRenderMode);
     m_playlist = std::make_unique<ObsPlaylist>();
     m_sourceCatalog = std::make_unique<ObsSourceCatalog>();
     const uint64_t previewBlankId = m_sourceCatalog->addSystemBlank("Blank 1");
@@ -429,6 +474,7 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     m_processMetricsTimer = new QTimer(this);
     connect(m_processMetricsTimer, &QTimer::timeout, this, &ObsDualMediaTestWindow::updateProcessMetrics);
     m_processMetricsTimer->start(2000);
+    applyLanguage();
     updateProcessMetrics();
     QTimer::singleShot(0, this, [this] {
         updateMonitorLayout();
@@ -1247,6 +1293,7 @@ bool ObsDualMediaTestWindow::fadePreviewToProgram() {
     rememberProgramSnapshot(outgoingSnapshot);
 
     auto incoming = std::make_unique<ObsPlaybackBackend>(m_context);
+    incoming->setRenderMode(m_selectedProgramRenderMode);
     // Prepare incoming media silently, then transfer the single WASAPI monitor atomically at FADE start.
     incoming->setAudioOutputEnabled(false);
     incoming->setLooping(incomingSnapshot.looping);
@@ -1803,6 +1850,15 @@ void ObsDualMediaTestWindow::setProjectFrameRate(int index) {
     }
     QMessageBox::warning(this, QStringLiteral("Project FPS"),
                          QStringLiteral("Không thể đổi FPS khi OBS đang có output hoạt động."));
+}
+
+void ObsDualMediaTestWindow::setProgramRenderMode(int index) {
+    if (!m_programRenderMode || index < 0) return;
+    m_selectedProgramRenderMode = static_cast<ObsRenderMode>(m_programRenderMode->itemData(index).toInt());
+    if (m_program.backend) m_program.backend->setRenderMode(m_selectedProgramRenderMode);
+    if (m_program.fadeOutgoing) m_program.fadeOutgoing->setRenderMode(m_selectedProgramRenderMode);
+    LOG_INFO("OBS Program render mode changed to {}.",
+             m_selectedProgramRenderMode == ObsRenderMode::FitToScreen ? "FIT" : "DEFAULT");
 }
 
 void ObsDualMediaTestWindow::setProgramSourceId(uint64_t sourceId) {

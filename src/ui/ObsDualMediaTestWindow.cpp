@@ -77,13 +77,26 @@ QString formatTimeline(int64_t positionMs, int64_t durationMs) {
     return QStringLiteral("%1 / %2").arg(formatMilliseconds(positionMs), formatMilliseconds(durationMs));
 }
 
-QString catalogSourceName(const ObsCatalogSource& source) {
+QString catalogSourceName(const ObsCatalogSource& source, bool vietnamese) {
+    if (source.systemSource && source.type == ObsCatalogSourceType::ColorBlank) {
+        const QString original = QString::fromUtf8(source.displayName.c_str());
+        const QString suffix = original.section(QLatin1Char(' '), -1);
+        return vietnamese ? QStringLiteral("Nền trống %1").arg(suffix) : original;
+    }
     if (!source.displayName.empty()) return QString::fromUtf8(source.displayName.c_str());
     return QFileInfo(QString::fromStdWString(source.path.wstring())).fileName();
 }
 
-QString catalogSourceBadge(const ObsCatalogSource& source) {
-    return QString::fromLatin1(obsCatalogSourceTypeName(source.type));
+QString catalogSourceBadge(const ObsCatalogSource& source, bool vietnamese) {
+    if (!vietnamese) return QString::fromLatin1(obsCatalogSourceTypeName(source.type));
+    switch (source.type) {
+    case ObsCatalogSourceType::VideoFile: return QStringLiteral("VIDEO");
+    case ObsCatalogSourceType::AudioFile: return QStringLiteral("ÂM THANH");
+    case ObsCatalogSourceType::ImageFile: return QStringLiteral("HÌNH ẢNH");
+    case ObsCatalogSourceType::RtspCamera: return QStringLiteral("RTSP");
+    case ObsCatalogSourceType::ColorBlank: return QStringLiteral("NỀN");
+    }
+    return {};
 }
 
 class CatalogTileWidget final : public QWidget {
@@ -180,6 +193,7 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     m_quickPlayButton->setText(QStringLiteral("QUICK PLAY"));
     m_cutButton->setText(QStringLiteral("CUT"));
     m_fadeButton->setText(QStringLiteral("FADE"));
+    bindLocalizedProperty(m_quickPlayButton, "text", "PHÁT NHANH", "QUICK PLAY");
     m_fullscreenButton = new QPushButton(QStringLiteral("FULL SCREEN"), transitionWidget);
     bindLocalizedProperty(m_fullscreenButton, "text", "TOÀN MÀN HÌNH", "FULL SCREEN");
     bindLocalizedProperty(m_fullscreenButton, "toolTip",
@@ -319,7 +333,9 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
         m_projectFrameRate->setItemData(static_cast<int>(index), frameRates[index].denominator, Qt::UserRole + 1);
         if (frameRates[index] == currentFrameRate) m_projectFrameRate->setCurrentIndex(static_cast<int>(index));
     }
-    m_projectFrameRate->setToolTip(QStringLiteral("Project FPS cho toàn bộ PVW, PGM và output"));
+    bindLocalizedProperty(m_projectFrameRate, "toolTip",
+                          "FPS dự án cho toàn bộ PVW, PGM và output",
+                          "Project FPS for PVW, PGM and output");
     m_programRenderMode = new QComboBox(inputBank);
     m_programRenderMode->setFixedWidth(88);
     m_programRenderMode->addItem(QStringLiteral("Default"), static_cast<int>(ObsRenderMode::AspectFit));
@@ -332,13 +348,14 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     connect(m_programRenderMode, &QComboBox::currentIndexChanged,
             this, &ObsDualMediaTestWindow::setProgramRenderMode);
     auto* languageLabel = new QLabel(QStringLiteral("LANG"), inputBank);
-    bindLocalizedProperty(languageLabel, "text", "NGÔN NGỮ", "LANG");
+    bindLocalizedProperty(languageLabel, "text", "NN", "LANG");
     languageLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
     m_languageSelector = new QComboBox(inputBank);
     m_languageSelector->setFixedWidth(58);
     m_languageSelector->addItem(QStringLiteral("VN"), QStringLiteral("vi"));
     m_languageSelector->addItem(QStringLiteral("EN"), QStringLiteral("en"));
     m_languageSelector->setCurrentIndex(m_language == UiLanguage::Vietnamese ? 0 : 1);
+    bindLocalizedProperty(m_languageSelector, "toolTip", "Chọn ngôn ngữ giao diện", "Select interface language");
     connect(m_languageSelector, &QComboBox::currentIndexChanged, this, &ObsDualMediaTestWindow::setLanguage);
     inputToolbar->addWidget(m_addSourceButton);
     inputToolbar->addWidget(m_openPlaylistButton);
@@ -439,8 +456,8 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
             [this](quint64 sourceId, int64_t positionMs, int64_t durationMs, const QImage& image) {
         if (sourceId == m_stagedPreviewSourceId) showStagedPreviewFrame(positionMs, durationMs, image);
     });
-    m_preview.statusLabel->setText(QStringLiteral("PVW empty"));
-    m_program.statusLabel->setText(QStringLiteral("PGM empty"));
+    m_preview.statusLabel->setText(localized("PVW trống", "PVW empty"));
+    m_program.statusLabel->setText(localized("PGM trống", "PGM empty"));
     if (const auto blank = m_sourceCatalog->find(previewBlankId)) stagePreviewSource(*blank);
     if (const auto blank = m_sourceCatalog->find(programBlankId)) {
         m_program.backend->setAudioOutputEnabled(true);
@@ -484,6 +501,76 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
 }
 
 ObsDualMediaTestWindow::~ObsDualMediaTestWindow() { closePanels(); }
+
+QString ObsDualMediaTestWindow::localized(const char* vietnamese, const char* english) const {
+    return QString::fromUtf8(m_language == UiLanguage::Vietnamese ? vietnamese : english);
+}
+
+void ObsDualMediaTestWindow::bindLocalizedProperty(QObject* object, const char* propertyName,
+                                                   const char* vietnamese, const char* english) {
+    if (!object || !propertyName) return;
+    const QByteArray property(propertyName);
+    object->setProperty(QByteArray("i18n_" + property + "_vi").constData(), QString::fromUtf8(vietnamese));
+    object->setProperty(QByteArray("i18n_" + property + "_en").constData(), QString::fromUtf8(english));
+    object->setProperty(propertyName, localized(vietnamese, english));
+}
+
+void ObsDualMediaTestWindow::applyLanguage() {
+    const auto applyObject = [this](QObject* object) {
+        if (!object) return;
+        for (const QByteArray property : {QByteArray("text"), QByteArray("toolTip"),
+                                          QByteArray("accessibleName"), QByteArray("windowTitle")}) {
+            const QByteArray key = "i18n_" + property +
+                (m_language == UiLanguage::Vietnamese ? "_vi" : "_en");
+            const QVariant value = object->property(key.constData());
+            if (value.isValid()) object->setProperty(property.constData(), value);
+        }
+    };
+
+    applyObject(this);
+    for (QObject* object : findChildren<QObject*>()) applyObject(object);
+
+    if (m_catalogThumbnailSize && m_catalogThumbnailSize->count() >= 3) {
+        m_catalogThumbnailSize->setItemText(0, localized("Nhỏ", "Small"));
+        m_catalogThumbnailSize->setItemText(1, localized("Vừa", "Normal"));
+        m_catalogThumbnailSize->setItemText(2, localized("Lớn", "Large"));
+    }
+    if (m_sourceTypeFilter && m_sourceTypeFilter->count() >= 6) {
+        m_sourceTypeFilter->setItemText(0, localized("Tất cả", "All types"));
+        m_sourceTypeFilter->setItemText(1, localized("Video", "Video"));
+        m_sourceTypeFilter->setItemText(2, localized("Âm thanh", "Audio"));
+        m_sourceTypeFilter->setItemText(3, localized("Hình ảnh", "Images"));
+        m_sourceTypeFilter->setItemText(4, localized("Camera RTSP", "RTSP cameras"));
+        m_sourceTypeFilter->setItemText(5, localized("Nền trống", "Blank"));
+    }
+    if (m_programRenderMode && m_programRenderMode->count() >= 2) {
+        m_programRenderMode->setItemText(0, localized("Mặc định", "Default"));
+        m_programRenderMode->setItemText(1, localized("Vừa màn hình", "Fit"));
+    }
+
+    if (m_sourceCatalog) refreshCatalogUi();
+    refreshPlaylistButtonUi();
+    if (m_playlistDialog) refreshPlaylistUi();
+    if (m_programOutput) {
+        m_programOutput->setWindowTitle(localized("MediaSwitcher - Output chương trình",
+                                                  "MediaSwitcher Program Output"));
+    }
+    updatePanel(m_preview, QStringLiteral("PVW"));
+    updatePanel(m_program, QStringLiteral("PGM"));
+    updateProcessMetrics();
+}
+
+void ObsDualMediaTestWindow::setLanguage(int index) {
+    if (!m_languageSelector || index < 0) return;
+    const UiLanguage requested = m_languageSelector->itemData(index).toString() == QStringLiteral("en")
+        ? UiLanguage::English : UiLanguage::Vietnamese;
+    if (requested == m_language) return;
+    m_language = requested;
+    QSettings().setValue(QStringLiteral("ui/language"),
+                         m_language == UiLanguage::Vietnamese ? QStringLiteral("vi") : QStringLiteral("en"));
+    applyLanguage();
+    LOG_INFO("OBS UI language changed to {}.", m_language == UiLanguage::Vietnamese ? "VI" : "EN");
+}
 
 void ObsDualMediaTestWindow::closeEvent(QCloseEvent* event) {
     m_closing = true;
@@ -609,6 +696,9 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     auto* headerLayout = new QHBoxLayout(header);
     headerLayout->setContentsMargins(7, 0, 6, 0);
     panel.sourceLabel = new QLabel(title, header);
+    bindLocalizedProperty(panel.sourceLabel, "text",
+                          &panel == &m_preview ? "XEM TRƯỚC (PVW) - TẠM DỪNG" : "CHƯƠNG TRÌNH (PGM) - ÂM THANH TRỰC TIẾP",
+                          &panel == &m_preview ? "PREVIEW (PVW) - PAUSED" : "PROGRAM (PGM) - LIVE AUDIO");
     panel.sourceLabel->setStyleSheet(QStringLiteral("color: #f1f6f8; font-weight: bold; border: 0;"));
     panel.sourceLabel->setMinimumWidth(0);
     panel.sourceLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
@@ -646,23 +736,28 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     panel.playPauseButton->setFixedSize(32, 30);
     panel.playPauseButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaPlay));
     panel.playPauseButton->setToolTip(QStringLiteral("Phát PVW/PGM"));
+    bindLocalizedProperty(panel.playPauseButton, "toolTip", "Phát/Tạm dừng", "Play/Pause");
     panel.loopButton = new QPushButton(group);
     panel.loopButton->setFixedSize(32, 30);
     panel.loopButton->setIcon(group->style()->standardIcon(QStyle::SP_BrowserReload));
     panel.loopButton->setToolTip(QStringLiteral("Bật/tắt lặp lại"));
+    bindLocalizedProperty(panel.loopButton, "toolTip", "Bật/tắt lặp lại", "Toggle loop");
     panel.loopButton->setProperty("loopActive", false);
     panel.resetButton = new QPushButton(group);
     panel.resetButton->setFixedSize(32, 30);
     panel.resetButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaSkipBackward));
     panel.resetButton->setToolTip(QStringLiteral("Reset về đầu"));
+    bindLocalizedProperty(panel.resetButton, "toolTip", "Đặt lại về đầu", "Reset to start");
     panel.seekBackButton = new QPushButton(group);
     panel.seekBackButton->setFixedSize(32, 30);
     panel.seekBackButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaSeekBackward));
     panel.seekBackButton->setToolTip(QStringLiteral("Lùi 10 giây"));
+    bindLocalizedProperty(panel.seekBackButton, "toolTip", "Lùi 10 giây", "Seek back 10 seconds");
     panel.seekForwardButton = new QPushButton(group);
     panel.seekForwardButton->setFixedSize(32, 30);
     panel.seekForwardButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaSeekForward));
     panel.seekForwardButton->setToolTip(QStringLiteral("Tới 10 giây"));
+    bindLocalizedProperty(panel.seekForwardButton, "toolTip", "Tiến 10 giây", "Seek forward 10 seconds");
     panel.seekSlider = new QSlider(Qt::Horizontal, group);
     panel.seekSlider->setRange(0, 1000);
     panel.timeLabel = new QLabel(QStringLiteral("00:00 / --:--"), group);
@@ -676,11 +771,13 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     panel.volumeSlider->setValue(100);
     panel.volumeSlider->setFixedWidth(58);
     panel.volumeSlider->setToolTip(QStringLiteral("Âm lượng"));
+    bindLocalizedProperty(panel.volumeSlider, "toolTip", "Âm lượng", "Volume");
     panel.muteButton = new QPushButton(group);
     panel.muteButton->setCheckable(true);
     panel.muteButton->setFixedSize(24, 22);
     panel.muteButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaVolume));
     panel.muteButton->setToolTip(QStringLiteral("Tắt tiếng"));
+    bindLocalizedProperty(panel.muteButton, "toolTip", "Tắt tiếng", "Mute");
     panel.muteButton->setStyleSheet(QStringLiteral(
         "QPushButton { background: #202b33; border: 0; border-radius: 3px; padding: 1px; }"
         "QPushButton:hover { background: #29414c; }"
@@ -698,6 +795,8 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     }
     panel.leftAudioMeter->setToolTip(QStringLiteral("Kênh trái"));
     panel.rightAudioMeter->setToolTip(QStringLiteral("Kênh phải"));
+    bindLocalizedProperty(panel.leftAudioMeter, "toolTip", "Kênh trái", "Left channel");
+    bindLocalizedProperty(panel.rightAudioMeter, "toolTip", "Kênh phải", "Right channel");
     controls->addWidget(panel.seekSlider, 1);
     controls->addWidget(panel.timeLabel);
     controls->addWidget(panel.seekBackButton);
@@ -720,7 +819,7 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     connect(panel.muteButton, &QPushButton::toggled, this, [this, &panel](bool muted) {
         panel.audioMuted = muted;
         panel.muteButton->setIcon(style()->standardIcon(muted ? QStyle::SP_MediaVolumeMuted : QStyle::SP_MediaVolume));
-        panel.muteButton->setToolTip(muted ? QStringLiteral("Bật tiếng") : QStringLiteral("Tắt tiếng"));
+        panel.muteButton->setToolTip(muted ? localized("Bật tiếng", "Unmute") : localized("Tắt tiếng", "Mute"));
         if (panel.backend && panel.backend->isOpen()) panel.backend->setVolume(muted ? 0.0f : panel.volume);
     });
     connect(panel.seekSlider, &QSlider::sliderPressed, this, [&panel] { panel.sliderDragging = true; });
@@ -748,7 +847,7 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
 bool ObsDualMediaTestWindow::openPanel(Panel& panel, const std::filesystem::path& mediaPath, bool audioOutput) {
     panel.backend->setAudioOutputEnabled(audioOutput);
     if (panel.backend->open(mediaPath, !audioOutput)) return true;
-    panel.statusLabel->setText(QStringLiteral("Không thể tạo OBS media source."));
+    panel.statusLabel->setText(localized("Không thể tạo nguồn media OBS.", "Could not create the OBS media source."));
     return false;
 }
 
@@ -764,7 +863,7 @@ void ObsDualMediaTestWindow::initializeDisplay(Panel& panel) {
     panel.display = obs_display_create(&graphicsData, 0xFF000000);
     if (!panel.display) {
         LOG_ERROR("OBS dual media: obs_display_create failed.");
-        panel.statusLabel->setText(QStringLiteral("Không thể tạo OBS display."));
+        panel.statusLabel->setText(localized("Không thể tạo màn hình OBS.", "Could not create the OBS display."));
         return;
     }
     obs_display_add_draw_callback(panel.display, draw, &panel);
@@ -838,11 +937,13 @@ void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
             panel.rightAudioMeter->setValue(0);
             panel.seekSlider->setEnabled(supportsTransport && m_stagedPreviewDurationMs > 0);
             panel.playPauseButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
-            panel.playPauseButton->setToolTip(supportsTransport ? QStringLiteral("Phát PVW") : QStringLiteral("Ảnh tĩnh"));
+            panel.playPauseButton->setToolTip(supportsTransport
+                ? localized("Phát PVW", "Play PVW") : localized("Ảnh tĩnh", "Still image"));
             panel.timeLabel->setText(supportsTransport
                 ? formatTimeline(m_stagedPreviewPositionMs, m_stagedPreviewDurationMs)
                 : QStringLiteral("STILL"));
-            const QString name = source ? catalogSourceName(*source) : QString::fromStdWString(m_stagedPreviewPath.filename().wstring());
+            const QString name = source ? catalogSourceName(*source, m_language == UiLanguage::Vietnamese)
+                                        : QString::fromStdWString(m_stagedPreviewPath.filename().wstring());
             panel.sourceLabel->setText(panel.sourceLabel->fontMetrics().elidedText(
                 QStringLiteral("PVW  %1").arg(name), Qt::ElideRight, panel.sourceLabel->width()));
         }
@@ -878,17 +979,18 @@ void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
     if (!panel.sliderDragging && supportsTransport && duration > 0) panel.seekSlider->setValue(static_cast<int>(position * 1000 / duration));
     const bool isPlaying = panel.backend->state() == ObsPlaybackState::Playing;
     panel.playPauseButton->setIcon(style()->standardIcon(isPlaying ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
-    panel.playPauseButton->setToolTip(isPlaying ? QStringLiteral("Tạm dừng") : QStringLiteral("Phát"));
+    panel.playPauseButton->setToolTip(isPlaying ? localized("Tạm dừng", "Pause") : localized("Phát", "Play"));
     panel.loopButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
     panel.loopButton->setProperty("loopActive", panel.backend->isLooping());
     panel.loopButton->style()->unpolish(panel.loopButton);
     panel.loopButton->style()->polish(panel.loopButton);
-    panel.loopButton->setToolTip(panel.backend->isLooping() ? QStringLiteral("Tắt lặp lại") : QStringLiteral("Bật lặp lại"));
+    panel.loopButton->setToolTip(panel.backend->isLooping()
+        ? localized("Tắt lặp lại", "Disable loop") : localized("Bật lặp lại", "Enable loop"));
     panel.timeLabel->setText(panel.backend->isLiveInput() ? QStringLiteral("LIVE")
         : (supportsTransport ? formatTimeline(position, duration) : QStringLiteral("STILL")));
     const uint64_t sourceId = &panel == &m_preview ? m_previewSourceId : m_programSourceId;
     const auto catalogSource = m_sourceCatalog ? m_sourceCatalog->find(sourceId) : std::nullopt;
-    const QString sourceName = catalogSource ? catalogSourceName(*catalogSource)
+    const QString sourceName = catalogSource ? catalogSourceName(*catalogSource, m_language == UiLanguage::Vietnamese)
         : QFileInfo(QString::fromStdWString(panel.backend->mediaPath().filename().wstring())).fileName();
     const QString sourceText = QStringLiteral("%1  %2").arg(role, sourceName);
     panel.sourceLabel->setText(panel.sourceLabel->fontMetrics().elidedText(
@@ -914,7 +1016,8 @@ void ObsDualMediaTestWindow::updateProcessMetrics() {
 
     if (compactLayout) {
         m_processMetricsLabel->setText(
-            QStringLiteral("📊 CPU %1% | RAM %2 MB | %3 luồng | FPS %4 | ⏱ %5")
+            localized("📊 CPU %1% | RAM %2 MB | %3 luồng | FPS %4 | ⏱ %5",
+                      "📊 CPU %1% | RAM %2 MB | %3 threads | FPS %4 | ⏱ %5")
                 .arg(metrics.cpuPercent, 0, 'f', 1)
                 .arg(toMiB(metrics.workingSetBytes))
                 .arg(metrics.threadCount)
@@ -922,7 +1025,8 @@ void ObsDualMediaTestWindow::updateProcessMetrics() {
                 .arg(uptime));
     } else {
         m_processMetricsLabel->setText(
-            QStringLiteral("📊 TIẾN TRÌNH | PID %1 | CPU %2% | RAM %3/%4 MB | %5 luồng | %6 handle | FPS %7 | Input %8 | Decoder %9/3 | ⏱ %10")
+            localized("📊 TIẾN TRÌNH | PID %1 | CPU %2% | RAM %3/%4 MB | %5 luồng | %6 handle | FPS %7 | Nguồn %8 | Decoder %9/3 | ⏱ %10",
+                      "📊 PROCESS | PID %1 | CPU %2% | RAM %3/%4 MB | %5 threads | %6 handles | FPS %7 | Inputs %8 | Decoders %9/3 | ⏱ %10")
                 .arg(metrics.processId)
                 .arg(metrics.cpuPercent, 0, 'f', 1)
                 .arg(toMiB(metrics.workingSetBytes))
@@ -936,13 +1040,20 @@ void ObsDualMediaTestWindow::updateProcessMetrics() {
     }
 
     m_processMetricsLabel->setToolTip(
-        QStringLiteral("THÔNG SỐ TIẾN TRÌNH MEDIASWITCHER OBS\n"
-                       "PID: %1\nCPU: %2% (%3 bộ xử lý logic)\n"
-                       "RAM working set: %4 MB\nRAM private: %5 MB\n"
-                       "Số luồng: %6\nSố handle: %7\n"
-                       "I/O đã đọc: %8 MB\nI/O đã ghi: %9 MB\n"
-                       "Project FPS: %10\nInput: %11\nDecoder đang hoạt động: %12/3\n"
-                       "Thời gian chạy: %13")
+        localized("THÔNG SỐ TIẾN TRÌNH MEDIASWITCHER OBS\n"
+                  "PID: %1\nCPU: %2% (%3 bộ xử lý logic)\n"
+                  "RAM working set: %4 MB\nRAM private: %5 MB\n"
+                  "Số luồng: %6\nSố handle: %7\n"
+                  "I/O đã đọc: %8 MB\nI/O đã ghi: %9 MB\n"
+                  "FPS dự án: %10\nNguồn: %11\nDecoder đang hoạt động: %12/3\n"
+                  "Thời gian chạy: %13",
+                  "MEDIASWITCHER OBS PROCESS METRICS\n"
+                  "PID: %1\nCPU: %2% (%3 logical processors)\n"
+                  "RAM working set: %4 MB\nRAM private: %5 MB\n"
+                  "Threads: %6\nHandles: %7\n"
+                  "I/O read: %8 MB\nI/O written: %9 MB\n"
+                  "Project FPS: %10\nInputs: %11\nActive decoders: %12/3\n"
+                  "Uptime: %13")
             .arg(metrics.processId)
             .arg(metrics.cpuPercent, 0, 'f', 1)
             .arg(metrics.logicalProcessorCount)
@@ -976,7 +1087,8 @@ void ObsDualMediaTestWindow::stagePreviewSource(const ObsCatalogSource& source) 
     // Open video inputs before they are taken live.  startPaused records the
     // intent through ffmpeg_source startup, so PVW is seekable but silent.
     if (!m_preview.backend->open(source, true)) {
-        m_preview.statusLabel->setText(QStringLiteral("Không thể mở source đã chọn trên PVW."));
+        m_preview.statusLabel->setText(localized("Không thể mở nguồn đã chọn trên PVW.",
+                                                "Could not open the selected source on PVW."));
         return;
     }
     m_previewSourceId = source.id;
@@ -1001,9 +1113,9 @@ void ObsDualMediaTestWindow::stagePreviewAtPosition(const std::filesystem::path&
     m_preview.seekSlider->setValue(0);
     m_preview.seekSlider->setEnabled(false);
     m_preview.playPauseButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
-    m_preview.playPauseButton->setToolTip(QStringLiteral("Phát PVW"));
+    m_preview.playPauseButton->setToolTip(localized("Phát PVW", "Play PVW"));
     m_preview.stagedFrameLabel->setPixmap({});
-    m_preview.stagedFrameLabel->setText(QStringLiteral("Đang tải khung hình xem trước..."));
+    m_preview.stagedFrameLabel->setText(localized("Đang tải khung hình xem trước...", "Loading preview frame..."));
     if (m_preview.videoStack) m_preview.videoStack->setCurrentWidget(m_preview.stagedFrameLabel);
     requestStagedPreviewFrame();
     refreshCatalogUi();
@@ -1248,7 +1360,7 @@ bool ObsDualMediaTestWindow::promotePreviewToProgram(const char* operation) {
     m_program.backend->setLooping(incoming.looping);
     if (!openCatalogSource(*m_program.backend, incoming.sourceId)) {
         LOG_ERROR("OBS dual media: {} failed to create Program runtime from Preview asset.", operation);
-        m_program.statusLabel->setText(QStringLiteral("Program promotion failed."));
+        m_program.statusLabel->setText(localized("Không thể chuyển nguồn lên Program.", "Program promotion failed."));
         return false;
     }
 
@@ -1522,12 +1634,17 @@ void ObsDualMediaTestWindow::addCatalogSource() {
 
 void ObsDualMediaTestWindow::addCatalogFiles(int sourceTypeFilter) {
     QFileDialog dialog(this, sourceTypeFilter == static_cast<int>(ObsCatalogSourceType::ImageFile)
-        ? QStringLiteral("Add image inputs") : QStringLiteral("Add media inputs"));
+        ? localized("Thêm nguồn hình ảnh", "Add image inputs")
+        : localized("Thêm nguồn media", "Add media inputs"));
     dialog.setFileMode(QFileDialog::ExistingFiles);
     if (sourceTypeFilter == static_cast<int>(ObsCatalogSourceType::ImageFile)) {
-        dialog.setNameFilter(QStringLiteral("Images (*.jpg *.jpeg *.png *.bmp *.webp *.gif *.tiff)"));
+        dialog.setNameFilter(localized("Hình ảnh (*.jpg *.jpeg *.png *.bmp *.webp *.gif *.tiff)",
+                                       "Images (*.jpg *.jpeg *.png *.bmp *.webp *.gif *.tiff)"));
     } else {
-        dialog.setNameFilter(QStringLiteral(
+        dialog.setNameFilter(localized(
+            "Tệp media (*.mp4 *.mkv *.mov *.avi *.m4v *.webm *.mp3 *.wav *.flac *.aac *.m4a *.ogg *.opus);;"
+            "Video (*.mp4 *.mkv *.mov *.avi *.m4v *.webm);;"
+            "Âm thanh (*.mp3 *.wav *.flac *.aac *.m4a *.ogg *.opus)",
             "Media files (*.mp4 *.mkv *.mov *.avi *.m4v *.webm *.mp3 *.wav *.flac *.aac *.m4a *.ogg *.opus);;"
             "Video (*.mp4 *.mkv *.mov *.avi *.m4v *.webm);;"
             "Audio (*.mp3 *.wav *.flac *.aac *.m4a *.ogg *.opus)"));
@@ -1555,18 +1672,20 @@ void ObsDualMediaTestWindow::addCatalogFiles(int sourceTypeFilter) {
 
 void ObsDualMediaTestWindow::addRtspSource() {
     bool accepted = false;
-    const QString endpoint = QInputDialog::getText(this, QStringLiteral("Add RTSP camera"), QStringLiteral("RTSP URL:"),
+    const QString endpoint = QInputDialog::getText(this, localized("Thêm camera RTSP", "Add RTSP camera"), QStringLiteral("RTSP URL:"),
                                                     QLineEdit::Normal, QStringLiteral("rtsp://"), &accepted).trimmed();
     if (!accepted || endpoint.isEmpty()) return;
 
     const QUrl url(endpoint);
     if (!url.isValid() || url.scheme().compare(QStringLiteral("rtsp"), Qt::CaseInsensitive) != 0 || url.host().isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("Invalid RTSP URL"),
-                             QStringLiteral("Enter a complete RTSP URL, for example rtsp://camera-host:554/stream."));
+        QMessageBox::warning(this, localized("URL RTSP không hợp lệ", "Invalid RTSP URL"),
+                             localized("Hãy nhập URL RTSP đầy đủ, ví dụ rtsp://camera-host:554/stream.",
+                                       "Enter a complete RTSP URL, for example rtsp://camera-host:554/stream."));
         return;
     }
     const QString suggestedName = url.host() + (url.port() > 0 ? QStringLiteral(":%1").arg(url.port()) : QString{});
-    const QString displayName = QInputDialog::getText(this, QStringLiteral("Name RTSP camera"), QStringLiteral("Input name:"),
+    const QString displayName = QInputDialog::getText(this, localized("Đặt tên camera RTSP", "Name RTSP camera"),
+                                                       localized("Tên nguồn:", "Input name:"),
                                                        QLineEdit::Normal, suggestedName, &accepted).trimmed();
     if (!accepted) return;
     const uint64_t id = m_sourceCatalog->addRtsp(endpoint.toUtf8().toStdString(),
@@ -1589,15 +1708,17 @@ void ObsDualMediaTestWindow::removeCatalogSource(uint64_t sourceId) {
     }
     const auto source = m_sourceCatalog->find(sourceId);
     if (source && source->systemSource) {
-        QMessageBox::information(this, QStringLiteral("Nguồn hệ thống"),
-                                 QStringLiteral("Nguồn Blank là nguồn an toàn có sẵn của hệ thống và không thể xoá."));
+        QMessageBox::information(this, localized("Nguồn hệ thống", "System source"),
+                                 localized("Nguồn nền trống là nguồn an toàn của hệ thống và không thể xoá.",
+                                           "The Blank source is a protected system source and cannot be removed."));
         return;
     }
 
     const bool clearsPreview = sourceId == m_previewSourceId;
     if (sourceId == m_programSourceId) {
-        QMessageBox::information(this, QStringLiteral("PGM đang phát"),
-                                 QStringLiteral("Không thể xoá source đang phát trên PGM. Hãy chuyển source khác lên PGM trước."));
+        QMessageBox::information(this, localized("PGM đang phát", "PGM is live"),
+                                 localized("Không thể xoá nguồn đang phát trên PGM. Hãy chuyển nguồn khác lên PGM trước.",
+                                           "The source currently live on PGM cannot be removed. Switch another source to PGM first."));
         LOG_WARN("OBS source catalog: removal of live Program source #{} rejected.", sourceId);
         return;
     }
@@ -1651,8 +1772,9 @@ void ObsDualMediaTestWindow::addSelectedCatalogSourceToPlaylist() {
     const uint64_t sourceId = item->data(Qt::UserRole).toULongLong();
     const auto source = m_sourceCatalog->find(sourceId);
     if (!source || !obsCatalogSourceHasTimeline(source->type)) {
-        QMessageBox::information(this, QStringLiteral("Playlist source"),
-                                 QStringLiteral("RTSP camera and still-image inputs are live/static sources and cannot be added to the timeline playlist."));
+        QMessageBox::information(this, localized("Nguồn Playlist", "Playlist source"),
+                                 localized("Camera RTSP và ảnh tĩnh là nguồn trực tiếp/tĩnh nên không thể thêm vào Playlist timeline.",
+                                           "RTSP cameras and still images are live/static sources and cannot be added to the timeline playlist."));
         return;
     }
     m_playlist->addSource(sourceId);
@@ -1739,8 +1861,9 @@ void ObsDualMediaTestWindow::refreshCatalogUi() {
         if (selectedType >= 0 && selectedType != static_cast<int>(source.type)) continue;
         const int displaySlot = static_cast<int>(index + 1);
         const QFileInfo info(QString::fromStdWString(source.path.wstring()));
-        const QString sourceName = catalogSourceName(source);
-        auto* item = new QListWidgetItem(QStringLiteral("#%1  [%2] %3").arg(displaySlot).arg(catalogSourceBadge(source), sourceName), m_sourceCatalogList);
+        const bool vietnamese = m_language == UiLanguage::Vietnamese;
+        const QString sourceName = catalogSourceName(source, vietnamese);
+        auto* item = new QListWidgetItem(QStringLiteral("#%1  [%2] %3").arg(displaySlot).arg(catalogSourceBadge(source, vietnamese), sourceName), m_sourceCatalogList);
         item->setSizeHint(itemSize);
         item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(source.id));
         item->setToolTip(source.type == ObsCatalogSourceType::RtspCamera ? QString::fromUtf8(source.endpoint.c_str()) : info.absoluteFilePath());
@@ -1790,7 +1913,7 @@ void ObsDualMediaTestWindow::refreshCatalogUi() {
         tileLayout->addWidget(previewWidget, 0, Qt::AlignHCenter);
         auto* title = new QLabel(QStringLiteral("#%1  [%2]%3 %4")
             .arg(displaySlot)
-            .arg(isProgram ? QStringLiteral("PGM") : catalogSourceBadge(source))
+            .arg(isProgram ? QStringLiteral("PGM") : catalogSourceBadge(source, vietnamese))
             .arg(isPreview && !isProgram ? QStringLiteral(" PVW") : QString{})
             .arg(sourceName), tile);
         title->setFixedHeight(19);
@@ -1805,7 +1928,7 @@ void ObsDualMediaTestWindow::refreshCatalogUi() {
             auto* removeButton = new QToolButton(tile);
             removeButton->setFixedSize(16, 16);
             removeButton->setIcon(style()->standardIcon(QStyle::SP_DialogCloseButton));
-            removeButton->setToolTip(QStringLiteral("Xoá source"));
+            removeButton->setToolTip(localized("Xoá nguồn", "Remove source"));
             removeButton->setStyleSheet(QStringLiteral(
                 "QToolButton { background: #8f2638; border: 1px solid #cf7685; border-radius: 1px; padding: 0; }"
                 "QToolButton:hover { background: #c93449; border-color: #ffd0d6; }"
@@ -1848,8 +1971,9 @@ void ObsDualMediaTestWindow::setProjectFrameRate(int index) {
     if (activeIt != frameRates.end()) {
         m_projectFrameRate->setCurrentIndex(static_cast<int>(std::distance(frameRates.begin(), activeIt)));
     }
-    QMessageBox::warning(this, QStringLiteral("Project FPS"),
-                         QStringLiteral("Không thể đổi FPS khi OBS đang có output hoạt động."));
+    QMessageBox::warning(this, localized("FPS dự án", "Project FPS"),
+                         localized("Không thể đổi FPS khi OBS đang có output hoạt động.",
+                                   "FPS cannot be changed while an OBS output is active."));
 }
 
 void ObsDualMediaTestWindow::setProgramRenderMode(int index) {
@@ -1889,7 +2013,7 @@ void ObsDualMediaTestWindow::refreshPlaylistButtonUi() {
     }
 
     if (m_playlistMode) {
-        m_openPlaylistButton->setText(QStringLiteral("Stop Playlist"));
+        m_openPlaylistButton->setText(localized("Dừng Playlist", "Stop Playlist"));
         m_openPlaylistButton->setStyleSheet(QStringLiteral(
             "QPushButton { background: #9f2636; color: #ffffff; border: 1px solid #ff8794; font-weight: bold; }"
             "QPushButton:hover { background: #c43146; }"
@@ -1898,7 +2022,7 @@ void ObsDualMediaTestWindow::refreshPlaylistButtonUi() {
     }
 
     if (!m_playlist->empty()) {
-        m_openPlaylistButton->setText(QStringLiteral("Play Playlist"));
+        m_openPlaylistButton->setText(localized("Phát Playlist", "Play Playlist"));
         m_openPlaylistButton->setStyleSheet(QStringLiteral(
             "QPushButton { background: #168044; color: #ffffff; border: 1px solid #55c47f; font-weight: bold; }"
             "QPushButton:hover { background: #1b9952; }"
@@ -1921,18 +2045,19 @@ void ObsDualMediaTestWindow::refreshPlaylistUi() {
     for (size_t index = 0; index < itemCount; ++index) {
         const uint64_t sourceId = editing ? m_playlistDraft[index] : m_playlist->sourceIdAt(index);
         const auto source = m_sourceCatalog->find(sourceId);
-        const QString name = source ? catalogSourceName(*source) : QStringLiteral("Missing source");
+        const QString name = source ? catalogSourceName(*source, m_language == UiLanguage::Vietnamese)
+                                    : localized("Thiếu nguồn", "Missing source");
         auto* item = new QListWidgetItem(QStringLiteral("%1. %2").arg(index + 1).arg(name), m_playlistList);
         if (m_playlistMode && index == m_playlist->currentIndex()) item->setText(item->text() + QStringLiteral("  [PGM]"));
     }
 
     if (editing) {
-        m_playlistStatus->setText(itemCount == 0 ? QStringLiteral("Playlist: Empty")
-            : QStringLiteral("Playlist: Editing | %1 item(s)").arg(itemCount));
+        m_playlistStatus->setText(itemCount == 0 ? localized("Playlist: Trống", "Playlist: Empty")
+            : localized("Playlist: Đang chỉnh sửa | %1 mục", "Playlist: Editing | %1 item(s)").arg(itemCount));
     } else {
-        m_playlistStatus->setText(m_playlist->empty() ? QStringLiteral("Playlist: Empty")
-            : QStringLiteral("Playlist: %1 | PGM-only %2/%3")
-                .arg(m_playlistMode ? QStringLiteral("Running") : QStringLiteral("Ready"))
+        m_playlistStatus->setText(m_playlist->empty() ? localized("Playlist: Trống", "Playlist: Empty")
+            : localized("Playlist: %1 | Chỉ PGM %2/%3", "Playlist: %1 | PGM-only %2/%3")
+                .arg(m_playlistMode ? localized("Đang chạy", "Running") : localized("Sẵn sàng", "Ready"))
                 .arg(m_playlist->currentIndex() + 1).arg(m_playlist->size()));
     }
 }
@@ -1940,13 +2065,15 @@ void ObsDualMediaTestWindow::refreshPlaylistUi() {
 void ObsDualMediaTestWindow::showPlaylistManager() {
     if (!m_playlistDialog) {
         m_playlistDialog = new QDialog(this);
-        m_playlistDialog->setWindowTitle(QStringLiteral("OBS Playlist Manager"));
+        bindLocalizedProperty(m_playlistDialog, "windowTitle", "Quản lý OBS Playlist", "OBS Playlist Manager");
         m_playlistDialog->resize(760, 470);
         auto* layout = new QVBoxLayout(m_playlistDialog);
         auto* columns = new QHBoxLayout();
 
         auto* availableColumn = new QVBoxLayout();
-        availableColumn->addWidget(new QLabel(QStringLiteral("Available Inputs"), m_playlistDialog));
+        auto* availableLabel = new QLabel(m_playlistDialog);
+        bindLocalizedProperty(availableLabel, "text", "Nguồn có sẵn", "Available Inputs");
+        availableColumn->addWidget(availableLabel);
         auto* available = new QListWidget(m_playlistDialog);
         available->setObjectName(QStringLiteral("playlistAvailableInputs"));
         availableColumn->addWidget(available, 1);
@@ -1962,12 +2089,16 @@ void ObsDualMediaTestWindow::showPlaylistManager() {
         columns->addLayout(commands);
 
         auto* playlistColumn = new QVBoxLayout();
-        playlistColumn->addWidget(new QLabel(QStringLiteral("PGM Playlist"), m_playlistDialog));
+        auto* playlistLabel = new QLabel(m_playlistDialog);
+        bindLocalizedProperty(playlistLabel, "text", "Playlist PGM", "PGM Playlist");
+        playlistColumn->addWidget(playlistLabel);
         m_playlistList = new QListWidget(m_playlistDialog);
         playlistColumn->addWidget(m_playlistList, 1);
         auto* reorder = new QHBoxLayout();
         auto* up = new QPushButton(QStringLiteral("Up"), m_playlistDialog);
         auto* down = new QPushButton(QStringLiteral("Down"), m_playlistDialog);
+        bindLocalizedProperty(up, "text", "Lên", "Up");
+        bindLocalizedProperty(down, "text", "Xuống", "Down");
         reorder->addWidget(up);
         reorder->addWidget(down);
         playlistColumn->addLayout(reorder);
@@ -1977,11 +2108,15 @@ void ObsDualMediaTestWindow::showPlaylistManager() {
         auto* footer = new QHBoxLayout();
         m_playlistLoop = new QCheckBox(QStringLiteral("Loop Playlist"), m_playlistDialog);
         m_autoNext = new QCheckBox(QStringLiteral("Auto Next"), m_playlistDialog);
+        bindLocalizedProperty(m_playlistLoop, "text", "Lặp Playlist", "Loop Playlist");
+        bindLocalizedProperty(m_autoNext, "text", "Tự động tiếp", "Auto Next");
         m_playlistLoop->setChecked(m_playlist->isLooping());
         m_autoNext->setChecked(m_playlist->isAutoNext());
         m_playlistStatus = new QLabel(m_playlistDialog);
         m_playlistSaveButton = new QPushButton(QStringLiteral("Save"), m_playlistDialog);
         m_playlistCancelButton = new QPushButton(QStringLiteral("Cancel"), m_playlistDialog);
+        bindLocalizedProperty(m_playlistSaveButton, "text", "Lưu", "Save");
+        bindLocalizedProperty(m_playlistCancelButton, "text", "Huỷ", "Cancel");
         footer->addWidget(m_playlistLoop);
         footer->addWidget(m_autoNext);
         footer->addWidget(m_playlistStatus, 1);
@@ -2066,8 +2201,9 @@ void ObsDualMediaTestWindow::toggleProgramOutputFullscreen() {
 
     const QList<QScreen*> screens = QGuiApplication::screens();
     if (screens.size() < 2) {
-        QMessageBox::information(this, QStringLiteral("FULL SCREEN"),
-                                 QStringLiteral("Cần kết nối màn hình thứ hai để mở output PGM toàn màn hình."));
+        QMessageBox::information(this, localized("TOÀN MÀN HÌNH", "FULL SCREEN"),
+                                 localized("Cần kết nối màn hình thứ hai để mở output PGM toàn màn hình.",
+                                           "Connect a second display to open the PGM fullscreen output."));
         LOG_WARN("OBS program output: fullscreen output requested, but no second screen is available.");
         return;
     }
@@ -2077,6 +2213,8 @@ void ObsDualMediaTestWindow::toggleProgramOutputFullscreen() {
             return m_program.backend.get();
         });
     }
+    m_programOutput->setWindowTitle(localized("MediaSwitcher - Output chương trình",
+                                              "MediaSwitcher Program Output"));
 
     QScreen* outputScreen = screens.at(1);
     m_programOutput->setGeometry(outputScreen->geometry());

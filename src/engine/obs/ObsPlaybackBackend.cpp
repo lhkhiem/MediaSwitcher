@@ -125,6 +125,7 @@ bool ObsPlaybackBackend::openConfiguredSource(const char* sourceType, obs_data_t
         LOG_ERROR("OBS media: obs_source_create('{}') failed for '{}'.", sourceType, toUtf8Path(reference));
         return false;
     }
+    if (m_supportsAudio) obs_source_set_volume(m_source, m_volume);
     LOG_INFO("OBS media: Source creation succeeded; creating view.");
     m_view = obs_view_create();
     if (!m_view) {
@@ -362,16 +363,16 @@ void ObsPlaybackBackend::setAudioOutputEnabled(bool enabled) {
 }
 
 void ObsPlaybackBackend::setVolume(float volume) {
-    if (!m_source || !m_supportsAudio) return;
-    obs_source_set_volume(m_source, std::clamp(volume, 0.0f, 1.0f));
+    m_volume = std::clamp(volume, 0.0f, 1.0f);
+    if (m_source && m_supportsAudio) obs_source_set_volume(m_source, m_volume);
 }
 
 float ObsPlaybackBackend::volume() const {
-    return m_source && m_supportsAudio ? obs_source_get_volume(m_source) : 0.0f;
+    return m_volume;
 }
 
-float ObsPlaybackBackend::takeLeftAudioPeak() { return m_leftAudioPeak.exchange(0.0f); }
-float ObsPlaybackBackend::takeRightAudioPeak() { return m_rightAudioPeak.exchange(0.0f); }
+float ObsPlaybackBackend::takeLeftAudioPeak() { return m_leftAudioPeak.exchange(0.0f, std::memory_order_relaxed); }
+float ObsPlaybackBackend::takeRightAudioPeak() { return m_rightAudioPeak.exchange(0.0f, std::memory_order_relaxed); }
 
 void ObsPlaybackBackend::setRenderSource(obs_source_t* source) {
     if (m_view) obs_view_set_source(m_view, 0, source);
@@ -449,8 +450,15 @@ void ObsPlaybackBackend::onAudioCaptured(void* data, obs_source_t*, const audio_
         leftPeak = std::max(leftPeak, std::abs(left[index]));
         rightPeak = std::max(rightPeak, std::abs(right[index]));
     }
-    backend->m_leftAudioPeak.store(std::clamp(leftPeak, 0.0f, 1.0f));
-    backend->m_rightAudioPeak.store(std::clamp(rightPeak, 0.0f, 1.0f));
+    const auto accumulatePeak = [](std::atomic<float>& destination, float peak) {
+        peak = std::clamp(peak, 0.0f, 1.0f);
+        float current = destination.load(std::memory_order_relaxed);
+        while (current < peak && !destination.compare_exchange_weak(
+                   current, peak, std::memory_order_relaxed, std::memory_order_relaxed)) {}
+    };
+    // Giữ peak lớn nhất giữa hai khung UI để transient ngắn không bị ghi đè.
+    accumulatePeak(backend->m_leftAudioPeak, leftPeak);
+    accumulatePeak(backend->m_rightAudioPeak, rightPeak);
 }
 
 void ObsPlaybackBackend::connectMediaSignals() {

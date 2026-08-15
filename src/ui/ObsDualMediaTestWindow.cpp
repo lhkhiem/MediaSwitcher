@@ -1,5 +1,6 @@
 #include "ObsDualMediaTestWindow.h"
 #include "ObsProgramOutputWindow.h"
+#include "AudioMeterWidget.h"
 
 #include "common/logger/Logger.h"
 #include "engine/input/ThumbnailGenerator.h"
@@ -39,7 +40,6 @@ extern "C" {
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
-#include <QProgressBar>
 #include <QResizeEvent>
 #include <QSlider>
 #include <QSizePolicy>
@@ -208,19 +208,25 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
 
     auto* audioControls = new QHBoxLayout();
     audioControls->setContentsMargins(2, 6, 2, 0);
-    audioControls->setSpacing(3);
-    const auto addAudioStrip = [transitionWidget, audioControls](Panel& panel) {
+    audioControls->setSpacing(4);
+    const auto addAudioStrip = [transitionWidget, audioControls](Panel& panel, const QString& role) {
         auto* strip = new QWidget(transitionWidget);
         strip->setObjectName(QStringLiteral("audioStrip"));
         strip->setStyleSheet(QStringLiteral(
             "#audioStrip { background: transparent; border: 0; }"));
         auto* stripLayout = new QVBoxLayout(strip);
         stripLayout->setContentsMargins(0, 0, 0, 0);
-        stripLayout->setSpacing(2);
+        stripLayout->setSpacing(3);
+
+        auto* roleLabel = new QLabel(role, strip);
+        roleLabel->setAlignment(Qt::AlignCenter);
+        roleLabel->setStyleSheet(QStringLiteral(
+            "color: #b7c5ce; border: 0; font-size: 9px; font-weight: bold;"));
+        stripLayout->addWidget(roleLabel);
 
         auto* channels = new QHBoxLayout();
         channels->setContentsMargins(0, 0, 0, 0);
-        channels->setSpacing(4);
+        channels->setSpacing(3);
         auto* faderColumn = new QVBoxLayout();
         faderColumn->setContentsMargins(0, 0, 0, 0);
         faderColumn->setSpacing(3);
@@ -229,27 +235,27 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
         meterColumn->setSpacing(3);
         panel.volumeSlider->setParent(strip);
         panel.volumeSlider->setOrientation(Qt::Vertical);
-        panel.volumeSlider->setFixedWidth(16);
+        panel.volumeSlider->setFixedWidth(18);
         panel.volumeSlider->setMinimumHeight(90);
         panel.volumeSlider->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
-        panel.leftAudioMeter->setParent(strip);
-        panel.leftAudioMeter->setFixedWidth(10);
-        panel.leftAudioMeter->setMinimumHeight(0);
-        panel.leftAudioMeter->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
-        panel.rightAudioMeter->setParent(strip);
-        panel.rightAudioMeter->hide();
+        panel.audioMeter->setParent(strip);
+        panel.audioMeter->setCompactMode(true);
+        panel.audioMeter->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
         faderColumn->addWidget(panel.volumeSlider, 1, Qt::AlignHCenter);
+        panel.volumeValueLabel->setParent(strip);
+        panel.volumeValueLabel->setAlignment(Qt::AlignCenter);
+        faderColumn->addWidget(panel.volumeValueLabel, 0, Qt::AlignHCenter);
         panel.muteButton->setParent(strip);
         faderColumn->addWidget(panel.muteButton, 0, Qt::AlignHCenter);
         channels->addLayout(faderColumn);
-        meterColumn->addWidget(panel.leftAudioMeter, 1, Qt::AlignHCenter);
-        meterColumn->addSpacing(panel.muteButton->height() + 3);
+        meterColumn->addWidget(panel.audioMeter, 1, Qt::AlignHCenter);
+        meterColumn->addSpacing(panel.volumeValueLabel->sizeHint().height() + panel.muteButton->height() + 6);
         channels->addLayout(meterColumn);
         stripLayout->addLayout(channels, 1);
         audioControls->addWidget(strip, 1);
     };
-    addAudioStrip(m_preview);
-    addAudioStrip(m_program);
+    addAudioStrip(m_preview, QStringLiteral("PVW"));
+    addAudioStrip(m_program, QStringLiteral("PGM"));
     transitionControls->addLayout(audioControls, 1);
     switcherLayout->addWidget(transitionWidget);
     switcherLayout->addWidget(programPanel, 1);
@@ -488,6 +494,10 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
         }
     });
     m_timer->start(200);
+    m_audioMeterTimer = new QTimer(this);
+    m_audioMeterTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_audioMeterTimer, &QTimer::timeout, this, &ObsDualMediaTestWindow::updateAudioMeters);
+    m_audioMeterTimer->start(16);
     m_processMetricsTimer = new QTimer(this);
     connect(m_processMetricsTimer, &QTimer::timeout, this, &ObsDualMediaTestWindow::updateProcessMetrics);
     m_processMetricsTimer->start(2000);
@@ -774,7 +784,8 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     bindLocalizedProperty(panel.volumeSlider, "toolTip", "Âm lượng", "Volume");
     panel.muteButton = new QPushButton(group);
     panel.muteButton->setCheckable(true);
-    panel.muteButton->setFixedSize(24, 22);
+    panel.muteButton->setFixedSize(26, 24);
+    panel.muteButton->setIconSize(QSize(14, 14));
     panel.muteButton->setIcon(group->style()->standardIcon(QStyle::SP_MediaVolume));
     panel.muteButton->setToolTip(QStringLiteral("Tắt tiếng"));
     bindLocalizedProperty(panel.muteButton, "toolTip", "Tắt tiếng", "Mute");
@@ -782,21 +793,13 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
         "QPushButton { background: #202b33; border: 0; border-radius: 3px; padding: 1px; }"
         "QPushButton:hover { background: #29414c; }"
         "QPushButton:checked { background: #642d3a; }"));
-    panel.leftAudioMeter = new QProgressBar(group);
-    panel.rightAudioMeter = new QProgressBar(group);
-    for (QProgressBar* meter : {panel.leftAudioMeter, panel.rightAudioMeter}) {
-        meter->setRange(0, 100);
-        meter->setValue(0);
-        meter->setTextVisible(false);
-        meter->setOrientation(Qt::Vertical);
-        meter->setStyleSheet(QStringLiteral(
-            "QProgressBar { border: 0; border-radius: 4px; background: #10161b; }"
-            "QProgressBar::chunk { background: #31d9b1; border-radius: 3px; }"));
-    }
-    panel.leftAudioMeter->setToolTip(QStringLiteral("Kênh trái"));
-    panel.rightAudioMeter->setToolTip(QStringLiteral("Kênh phải"));
-    bindLocalizedProperty(panel.leftAudioMeter, "toolTip", "Kênh trái", "Left channel");
-    bindLocalizedProperty(panel.rightAudioMeter, "toolTip", "Kênh phải", "Right channel");
+    panel.volumeValueLabel = new QLabel(QStringLiteral("100%"), group);
+    panel.volumeValueLabel->setFixedWidth(26);
+    panel.volumeValueLabel->setStyleSheet(QStringLiteral(
+        "color: #79dce9; border: 0; font-size: 9px; font-weight: bold;"));
+    panel.audioMeter = new AudioMeterWidget(group, false);
+    panel.audioMeter->setToolTip(QStringLiteral("Mức âm thanh stereo L/R"));
+    bindLocalizedProperty(panel.audioMeter, "toolTip", "Mức âm thanh stereo L/R", "Stereo L/R audio level");
     controls->addWidget(panel.seekSlider, 1);
     controls->addWidget(panel.timeLabel);
     controls->addWidget(panel.seekBackButton);
@@ -814,13 +817,14 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     connect(panel.seekForwardButton, &QPushButton::clicked, this, [this, &panel] { seekPanel(panel, 10000); });
     connect(panel.volumeSlider, &QSlider::valueChanged, this, [&panel](int value) {
         panel.volume = static_cast<float>(value) / 100.0f;
-        if (panel.backend && panel.backend->isOpen()) panel.backend->setVolume(panel.audioMuted ? 0.0f : panel.volume);
+        panel.volumeValueLabel->setText(QStringLiteral("%1%").arg(value));
+        if (panel.backend) panel.backend->setVolume(panel.audioMuted ? 0.0f : panel.volume);
     });
     connect(panel.muteButton, &QPushButton::toggled, this, [this, &panel](bool muted) {
         panel.audioMuted = muted;
         panel.muteButton->setIcon(style()->standardIcon(muted ? QStyle::SP_MediaVolumeMuted : QStyle::SP_MediaVolume));
         panel.muteButton->setToolTip(muted ? localized("Bật tiếng", "Unmute") : localized("Tắt tiếng", "Mute"));
-        if (panel.backend && panel.backend->isOpen()) panel.backend->setVolume(muted ? 0.0f : panel.volume);
+        if (panel.backend) panel.backend->setVolume(muted ? 0.0f : panel.volume);
     });
     connect(panel.seekSlider, &QSlider::sliderPressed, this, [&panel] { panel.sliderDragging = true; });
     connect(panel.seekSlider, &QSlider::sliderReleased, this, [this, &panel] {
@@ -933,8 +937,7 @@ void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
             panel.seekForwardButton->setEnabled(supportsTransport);
             panel.volumeSlider->setEnabled(supportsAudio);
             panel.muteButton->setEnabled(supportsAudio);
-            panel.leftAudioMeter->setValue(0);
-            panel.rightAudioMeter->setValue(0);
+            panel.audioMeter->reset();
             panel.seekSlider->setEnabled(supportsTransport && m_stagedPreviewDurationMs > 0);
             panel.playPauseButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
             panel.playPauseButton->setToolTip(supportsTransport
@@ -962,20 +965,7 @@ void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
     panel.seekForwardButton->setEnabled(supportsTransport);
     panel.volumeSlider->setEnabled(supportsAudio);
     panel.muteButton->setEnabled(supportsAudio);
-    if (supportsAudio) {
-        panel.backend->setVolume(panel.audioMuted ? 0.0f : panel.volume);
-        const float leftPeak = panel.backend->takeLeftAudioPeak();
-        const float rightPeak = panel.backend->takeRightAudioPeak();
-        panel.leftMeterLevel = std::max(leftPeak, panel.leftMeterLevel * 0.72f);
-        panel.rightMeterLevel = std::max(rightPeak, panel.rightMeterLevel * 0.72f);
-        panel.leftAudioMeter->setValue(static_cast<int>(std::clamp(std::max(panel.leftMeterLevel, panel.rightMeterLevel), 0.0f, 1.0f) * 100.0f));
-        panel.rightAudioMeter->setValue(static_cast<int>(std::clamp(panel.rightMeterLevel, 0.0f, 1.0f) * 100.0f));
-    } else {
-        panel.leftMeterLevel = 0.0f;
-        panel.rightMeterLevel = 0.0f;
-        panel.leftAudioMeter->setValue(0);
-        panel.rightAudioMeter->setValue(0);
-    }
+    if (!supportsAudio) panel.audioMeter->reset();
     if (!panel.sliderDragging && supportsTransport && duration > 0) panel.seekSlider->setValue(static_cast<int>(position * 1000 / duration));
     const bool isPlaying = panel.backend->state() == ObsPlaybackState::Playing;
     panel.playPauseButton->setIcon(style()->standardIcon(isPlaying ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
@@ -995,6 +985,18 @@ void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
     const QString sourceText = QStringLiteral("%1  %2").arg(role, sourceName);
     panel.sourceLabel->setText(panel.sourceLabel->fontMetrics().elidedText(
         sourceText, Qt::ElideRight, panel.sourceLabel->width()));
+}
+
+void ObsDualMediaTestWindow::updateAudioMeters() {
+    const auto updateMeter = [](Panel& panel) {
+        if (!panel.audioMeter || !panel.backend || !panel.backend->isOpen() || !panel.backend->supportsAudio()) {
+            if (panel.audioMeter) panel.audioMeter->reset();
+            return;
+        }
+        panel.audioMeter->setLevels(panel.backend->takeLeftAudioPeak(), panel.backend->takeRightAudioPeak());
+    };
+    updateMeter(m_preview);
+    updateMeter(m_program);
 }
 
 void ObsDualMediaTestWindow::updateProcessMetrics() {
@@ -1406,6 +1408,7 @@ bool ObsDualMediaTestWindow::fadePreviewToProgram() {
 
     auto incoming = std::make_unique<ObsPlaybackBackend>(m_context);
     incoming->setRenderMode(m_selectedProgramRenderMode);
+    incoming->setVolume(m_program.audioMuted ? 0.0f : m_program.volume);
     // Prepare incoming media silently, then transfer the single WASAPI monitor atomically at FADE start.
     incoming->setAudioOutputEnabled(false);
     incoming->setLooping(incomingSnapshot.looping);

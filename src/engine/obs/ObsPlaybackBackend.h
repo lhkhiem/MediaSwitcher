@@ -91,6 +91,7 @@ private:
     bool m_supportsTransport{true};
     bool m_supportsAudio{true};
     bool m_liveInput{false};
+    float m_volume{1.0f};
     std::atomic_bool m_pauseRequested{false};
     std::atomic_bool m_mediaEnded{false};
     std::atomic_int64_t m_pendingSeekMs{-1};

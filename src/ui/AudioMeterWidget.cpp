@@ -3,30 +3,92 @@
 #include <QPainter>
 #include <QLinearGradient>
 #include <algorithm>
+#include <cmath>
 
-AudioMeterWidget::AudioMeterWidget(QWidget* parent)
+namespace {
+constexpr float kFloorDb = -60.0f;
+constexpr float kReleaseSeconds = 0.22f;
+constexpr float kPeakReleaseSeconds = 0.55f;
+constexpr float kPeakHoldMilliseconds = 650.0f;
+
+float amplitudeToMeter(float amplitude) {
+    if (amplitude <= 0.001f) return 0.0f;
+    const float decibels = 20.0f * std::log10(amplitude);
+    return std::clamp((decibels - kFloorDb) / -kFloorDb, 0.0f, 1.0f);
+}
+}
+
+AudioMeterWidget::AudioMeterWidget(QWidget* parent, bool autoReadAudioEngine)
     : QWidget(parent)
 {
     setMinimumSize(45, 110);
     setMaximumWidth(70);
+    m_elapsed.start();
 
-    m_timer = new QTimer(this);
-    connect(m_timer, &QTimer::timeout, this, &AudioMeterWidget::updateMeters);
-    m_timer->start(33); // ~30 FPS UI refresh
+    if (autoReadAudioEngine) {
+        m_timer = new QTimer(this);
+        m_timer->setTimerType(Qt::PreciseTimer);
+        connect(m_timer, &QTimer::timeout, this, &AudioMeterWidget::updateMeters);
+        m_timer->start(16); // ~60 FPS cho meter phản hồi sát âm thanh.
+    }
 }
 
 void AudioMeterWidget::setLevels(float leftPeak, float rightPeak) {
-    m_leftLevel = std::clamp(leftPeak, 0.0f, 1.0f);
-    m_rightLevel = std::clamp(rightPeak, 0.0f, 1.0f);
+    const qint64 nowNs = m_elapsed.nsecsElapsed();
+    const float elapsedSeconds = m_lastUpdateNs > 0
+        ? std::clamp(static_cast<float>(nowNs - m_lastUpdateNs) / 1'000'000'000.0f, 0.001f, 0.1f)
+        : 0.016f;
+    m_lastUpdateNs = nowNs;
 
-    m_leftPeakHold = (std::max)(m_leftLevel, m_leftPeakHold * 0.95f);
-    m_rightPeakHold = (std::max)(m_rightLevel, m_rightPeakHold * 0.95f);
+    const float left = std::clamp(leftPeak, 0.0f, 1.0f);
+    const float right = std::clamp(rightPeak, 0.0f, 1.0f);
+    const float release = std::exp(-elapsedSeconds / kReleaseSeconds);
+    m_leftLevel = left >= m_leftLevel ? left : m_leftLevel * release;
+    m_rightLevel = right >= m_rightLevel ? right : m_rightLevel * release;
+
+    const auto updatePeakHold = [elapsedSeconds](float level, float& peak, float& holdMs) {
+        if (level >= peak) {
+            peak = level;
+            holdMs = kPeakHoldMilliseconds;
+            return;
+        }
+        holdMs -= elapsedSeconds * 1000.0f;
+        if (holdMs <= 0.0f) peak *= std::exp(-elapsedSeconds / kPeakReleaseSeconds);
+    };
+    updatePeakHold(left, m_leftPeakHold, m_leftPeakHoldMs);
+    updatePeakHold(right, m_rightPeakHold, m_rightPeakHoldMs);
+
+    update();
+}
+
+void AudioMeterWidget::setCompactMode(bool compact) {
+    m_compact = compact;
+    if (compact) {
+        setMinimumSize(16, 60);
+        setMaximumWidth(16);
+    } else {
+        setMinimumSize(45, 110);
+        setMaximumWidth(70);
+    }
+    updateGeometry();
+    update();
+}
+
+void AudioMeterWidget::reset() {
+    if (m_leftLevel == 0.0f && m_rightLevel == 0.0f &&
+        m_leftPeakHold == 0.0f && m_rightPeakHold == 0.0f) return;
+    m_leftLevel = 0.0f;
+    m_rightLevel = 0.0f;
+    m_leftPeakHold = 0.0f;
+    m_rightPeakHold = 0.0f;
+    m_leftPeakHoldMs = 0.0f;
+    m_rightPeakHoldMs = 0.0f;
+    update();
 }
 
 void AudioMeterWidget::updateMeters() {
     // Read real-time peak levels from AudioEngine (XAudio2 output)
     setLevels(AudioEngine::instance().getLeftPeak(), AudioEngine::instance().getRightPeak());
-    update();
 }
 
 void AudioMeterWidget::paintEvent(QPaintEvent* event) {
@@ -38,29 +100,30 @@ void AudioMeterWidget::paintEvent(QPaintEvent* event) {
     int w = width();
     int h = height();
 
-    // Background container with dark glassmorphism style
-    painter.fillRect(rect(), QColor(20, 22, 28));
+    if (!m_compact) painter.fillRect(rect(), QColor(20, 22, 28));
 
-    int barWidth = (w - 14) / 2;
-    if (barWidth < 6) barWidth = 6;
+    const int sidePadding = m_compact ? 2 : 5;
+    const int channelGap = m_compact ? 2 : 4;
+    const int barWidth = (std::max)(5, (w - sidePadding * 2 - channelGap) / 2);
 
-    int topPadding = 18;
-    int bottomPadding = 8;
-    int barHeight = h - topPadding - bottomPadding;
+    const int topPadding = m_compact ? 2 : 18;
+    const int bottomPadding = m_compact ? 2 : 8;
+    const int barHeight = (std::max)(1, h - topPadding - bottomPadding);
 
     // Draw Headers (L, R)
-    painter.setPen(QColor(160, 170, 190));
-    QFont font = painter.font();
-    font.setPointSize(8);
-    font.setBold(true);
-    painter.setFont(font);
-
-    painter.drawText(QRect(5, 2, barWidth, 14), Qt::AlignCenter, "L");
-    painter.drawText(QRect(9 + barWidth, 2, barWidth, 14), Qt::AlignCenter, "R");
+    if (!m_compact) {
+        painter.setPen(QColor(160, 170, 190));
+        QFont font = painter.font();
+        font.setPointSize(8);
+        font.setBold(true);
+        painter.setFont(font);
+        painter.drawText(QRect(sidePadding, 2, barWidth, 14), Qt::AlignCenter, QStringLiteral("L"));
+        painter.drawText(QRect(sidePadding + barWidth + channelGap, 2, barWidth, 14), Qt::AlignCenter, QStringLiteral("R"));
+    }
 
     // Bar Rectangles
-    QRect leftBarRect(5, topPadding, barWidth, barHeight);
-    QRect rightBarRect(9 + barWidth, topPadding, barWidth, barHeight);
+    const QRect leftBarRect(sidePadding, topPadding, barWidth, barHeight);
+    const QRect rightBarRect(sidePadding + barWidth + channelGap, topPadding, barWidth, barHeight);
 
     // Draw Bar Backgrounds
     painter.fillRect(leftBarRect, QColor(32, 36, 44));
@@ -73,14 +136,14 @@ void AudioMeterWidget::paintEvent(QPaintEvent* event) {
     grad.setColorAt(0.9, QColor(231, 76, 60));    // Red at top
 
     // Fill Left Bar Level
-    int activeHeightL = static_cast<int>(barHeight * m_leftLevel);
+    const int activeHeightL = static_cast<int>(barHeight * amplitudeToMeter(m_leftLevel));
     if (activeHeightL > 0) {
         QRect activeRectL(leftBarRect.x(), leftBarRect.bottom() - activeHeightL + 1, barWidth, activeHeightL);
         painter.fillRect(activeRectL, grad);
     }
 
     // Fill Right Bar Level
-    int activeHeightR = static_cast<int>(barHeight * m_rightLevel);
+    const int activeHeightR = static_cast<int>(barHeight * amplitudeToMeter(m_rightLevel));
     if (activeHeightR > 0) {
         QRect activeRectR(rightBarRect.x(), rightBarRect.bottom() - activeHeightR + 1, barWidth, activeHeightR);
         painter.fillRect(activeRectR, grad);
@@ -88,13 +151,13 @@ void AudioMeterWidget::paintEvent(QPaintEvent* event) {
 
     // Peak Hold Indicators
     if (m_leftPeakHold > 0.05f) {
-        int peakYL = leftBarRect.bottom() - static_cast<int>(barHeight * m_leftPeakHold);
+        const int peakYL = leftBarRect.bottom() - static_cast<int>(barHeight * amplitudeToMeter(m_leftPeakHold));
         painter.setPen(QColor(255, 255, 255));
         painter.drawLine(leftBarRect.x(), peakYL, leftBarRect.x() + barWidth - 1, peakYL);
     }
 
     if (m_rightPeakHold > 0.05f) {
-        int peakYR = rightBarRect.bottom() - static_cast<int>(barHeight * m_rightPeakHold);
+        const int peakYR = rightBarRect.bottom() - static_cast<int>(barHeight * amplitudeToMeter(m_rightPeakHold));
         painter.setPen(QColor(255, 255, 255));
         painter.drawLine(rightBarRect.x(), peakYR, rightBarRect.x() + barWidth - 1, peakYR);
     }

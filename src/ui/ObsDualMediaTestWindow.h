@@ -17,7 +17,6 @@ class QCheckBox;
 class QListWidget;
 class QDialog;
 class QPushButton;
-class QProgressBar;
 class QSlider;
 class QStackedLayout;
 class QTimer;
@@ -27,6 +26,7 @@ enum class ObsRenderMode;
 class ObsPlaylist;
 class ObsSourceCatalog;
 class ObsProgramOutputWindow;
+class AudioMeterWidget;
 struct ObsCatalogSource;
 class QCloseEvent;
 class QResizeEvent;
@@ -78,8 +78,8 @@ private:
         QPushButton* seekForwardButton{nullptr};
         QSlider* volumeSlider{nullptr};
         QPushButton* muteButton{nullptr};
-        QProgressBar* leftAudioMeter{nullptr};
-        QProgressBar* rightAudioMeter{nullptr};
+        QLabel* volumeValueLabel{nullptr};
+        AudioMeterWidget* audioMeter{nullptr};
         obs_display_t* display{nullptr};
         obs_source_t* fadeTransition{nullptr};
         std::atomic_bool fadeVideoCompleted{false};
@@ -93,8 +93,6 @@ private:
         bool sliderDragging{false};
         bool audioMuted{false};
         float volume{1.0f};
-        float leftMeterLevel{0.0f};
-        float rightMeterLevel{0.0f};
     };
 
     // A cue is the operator-visible PVW state.  It exists independently from
@@ -118,6 +116,7 @@ private:
     void resizeDisplay(Panel& panel);
     void updateMonitorLayout();
     void updatePanel(Panel& panel, const QString& role);
+    void updateAudioMeters();
     void updateProcessMetrics();
     QString localized(const char* vietnamese, const char* english) const;
     void bindLocalizedProperty(QObject* object, const char* propertyName, const char* vietnamese, const char* english);
@@ -180,6 +179,7 @@ private:
     std::unique_ptr<ObsProgramOutputWindow> m_programOutput;
     ObsContext& m_context;
     QTimer* m_timer{nullptr};
+    QTimer* m_audioMeterTimer{nullptr};
     QTimer* m_processMetricsTimer{nullptr};
     QLabel* m_processMetricsLabel{nullptr};
     QTimer* m_stagedSeekTimer{nullptr};

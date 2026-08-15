@@ -178,7 +178,9 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
         "#transitionRail { background: #20272e; border-left: 1px solid #3c4953; border-right: 1px solid #3c4953; }"
         "QPushButton { min-height: 28px; font-weight: bold; }"));
     auto* transitionControls = new QVBoxLayout(transitionWidget);
-    transitionControls->setContentsMargins(5, 12, 5, 12);
+    // Hai monitor có margin trên 5 px trước thanh title. Dùng cùng offset
+    // để cụm chuyển cảnh bắt đầu đúng một hàng với title PVW/PGM.
+    transitionControls->setContentsMargins(5, 5, 5, 12);
     transitionControls->setSpacing(6);
     transitionControls->setAlignment(Qt::AlignTop);
     m_quickPlayButton = new QPushButton(QStringLiteral("Quick Play"), transitionWidget);

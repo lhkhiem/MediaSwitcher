@@ -2,6 +2,8 @@
 
 #include <QDialog>
 
+class QTextBrowser;
+
 class AboutDialog : public QDialog {
     Q_OBJECT
 
@@ -11,4 +13,7 @@ public:
 
 private:
     void setupUi();
+    void loadContent();
+
+    QTextBrowser* m_contentView{nullptr};
 };

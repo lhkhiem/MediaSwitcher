@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/legal">
+        <file alias="copyright.txt">../copyright.txt</file>
+    </qresource>
+</RCC>

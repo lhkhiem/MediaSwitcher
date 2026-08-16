@@ -1,0 +1,16 @@
+THÔNG TIN BẢN QUYỀN
+Tên ứng dụng: MediaSwitcher Studio
+Phiên bản: 1.0.0
+Tác giả: Lê Khiêm
+MÔ TẢ
+Phần mềm trình chiếu hình ảnh và video chuyên nghiệp.
+
+GIẤY PHÉP
+Commercial / Proprietary License
+
+LIÊN HỆ
+Email: hoangkhiem.dev@gmail.com
+Phone/Zalo: 0886939879
+Website: https://lekhiem.io.vn
+
+Copyright © 2026 Lê Khiêm. All Rights Reserved.

@@ -81,6 +81,7 @@ private:
     void setupUi();
     void populateScreenSelector();
     void activatePlaylistCurrentStep();
+    void updateCopyrightDisplay();
 
     DirectXWindow* m_pvwWindow{nullptr};
     DirectXWindow* m_pgmWindow{nullptr};
@@ -142,6 +143,7 @@ private:
 
     // Debug Resource Metrics Panel Label
     QLabel* m_metricsLabel{nullptr};
+    QPushButton* m_copyrightBtn{nullptr};
 
     // Tracks which source is currently outputting audio to AudioEngine
     std::shared_ptr<IMediaSource> m_pgmAudioSource;

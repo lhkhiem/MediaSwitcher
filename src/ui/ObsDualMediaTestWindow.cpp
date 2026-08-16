@@ -1,7 +1,9 @@
 #include "ObsDualMediaTestWindow.h"
 #include "ObsProgramOutputWindow.h"
 #include "AudioMeterWidget.h"
+#include "AboutDialog.h"
 
+#include "common/config/CopyrightSettings.h"
 #include "common/logger/Logger.h"
 #include "engine/input/ThumbnailGenerator.h"
 #include "engine/diagnostics/MediaDiagnostics.h"
@@ -196,8 +198,10 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     m_cutButton->setText(QStringLiteral("CUT"));
     m_fadeButton->setText(QStringLiteral("FADE"));
     bindLocalizedProperty(m_quickPlayButton, "text", "PHÁT NHANH", "QUICK PLAY");
+    bindLocalizedProperty(m_cutButton, "text", "CẮT", "CUT");
+    bindLocalizedProperty(m_fadeButton, "text", "MỜ DẦN", "FADE");
     m_fullscreenButton = new QPushButton(QStringLiteral("FULL SCREEN"), transitionWidget);
-    bindLocalizedProperty(m_fullscreenButton, "text", "TOÀN MÀN HÌNH", "FULL SCREEN");
+    bindLocalizedProperty(m_fullscreenButton, "text", "FULL MÀN", "FULL SCREEN");
     bindLocalizedProperty(m_fullscreenButton, "toolTip",
                           "Mở output PGM toàn màn hình trên màn hình thứ hai",
                           "Open the PGM output fullscreen on the second display");
@@ -272,13 +276,17 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     auto* inputBankLayout = new QVBoxLayout(inputBank);
     inputBankLayout->setContentsMargins(8, 6, 8, 8);
     inputBankLayout->setSpacing(6);
-    auto* inputToolbar = new QHBoxLayout();
-    auto* inputTitle = new QLabel(QStringLiteral("INPUTS"), inputBank);
+    m_inputToolbarWidget = new QWidget(inputBank);
+    m_inputToolbarWidget->setObjectName(QStringLiteral("inputToolbar"));
+    auto* inputToolbar = new QHBoxLayout(m_inputToolbarWidget);
+    inputToolbar->setContentsMargins(0, 0, 0, 0);
+    inputToolbar->setSpacing(6);
+    auto* inputTitle = new QLabel(QStringLiteral("INPUTS"), m_inputToolbarWidget);
     bindLocalizedProperty(inputTitle, "text", "NGUỒN VÀO", "INPUTS");
     inputTitle->setStyleSheet(QStringLiteral("color: #dce7ee; font-weight: bold; letter-spacing: 0px; border: 0;"));
     inputToolbar->addWidget(inputTitle);
     inputToolbar->addStretch();
-    m_addSourceButton = new QPushButton(QStringLiteral("Add Input"), inputBank);
+    m_addSourceButton = new QPushButton(QStringLiteral("Add Input"), m_inputToolbarWidget);
     bindLocalizedProperty(m_addSourceButton, "text", "Thêm nguồn", "Add Input");
     auto* addMenu = new QMenu(m_addSourceButton);
     QAction* addMediaAction = addMenu->addAction(QStringLiteral("Video files..."));
@@ -289,8 +297,9 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     bindLocalizedProperty(addImageAction, "text", "Tệp hình ảnh...", "Image files...");
     bindLocalizedProperty(addRtspAction, "text", "Luồng mạng (RTSP)...", "Network stream (RTSP)...");
     m_addSourceButton->setMenu(addMenu);
-    m_openPlaylistButton = new QPushButton(QStringLiteral("Playlist"), inputBank);
-    m_playlistPreviousButton = new QPushButton(inputBank);
+    m_openPlaylistButton = new QPushButton(QStringLiteral("Playlist"), m_inputToolbarWidget);
+    bindLocalizedProperty(m_openPlaylistButton, "text", "Danh sách", "Playlist");
+    m_playlistPreviousButton = new QPushButton(m_inputToolbarWidget);
     m_playlistPreviousButton->setIcon(style()->standardIcon(QStyle::SP_MediaSkipBackward));
     m_playlistPreviousButton->setFixedSize(30, 30);
     m_playlistPreviousButton->setToolTip(QStringLiteral("Previous Playlist"));
@@ -298,7 +307,7 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     bindLocalizedProperty(m_playlistPreviousButton, "toolTip", "Mục Playlist trước", "Previous Playlist item");
     bindLocalizedProperty(m_playlistPreviousButton, "accessibleName", "Mục Playlist trước", "Previous Playlist item");
     m_playlistPreviousButton->hide();
-    m_playlistNextButton = new QPushButton(inputBank);
+    m_playlistNextButton = new QPushButton(m_inputToolbarWidget);
     m_playlistNextButton->setIcon(style()->standardIcon(QStyle::SP_MediaSkipForward));
     m_playlistNextButton->setFixedSize(30, 30);
     m_playlistNextButton->setToolTip(QStringLiteral("Next Playlist"));
@@ -306,29 +315,29 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     bindLocalizedProperty(m_playlistNextButton, "toolTip", "Mục Playlist tiếp theo", "Next Playlist item");
     bindLocalizedProperty(m_playlistNextButton, "accessibleName", "Mục Playlist tiếp theo", "Next Playlist item");
     m_playlistNextButton->hide();
-    auto* typeLabel = new QLabel(QStringLiteral("Type"), inputBank);
-    bindLocalizedProperty(typeLabel, "text", "Loại", "Type");
-    typeLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
-    auto* sizeLabel = new QLabel(QStringLiteral("Size"), inputBank);
-    bindLocalizedProperty(sizeLabel, "text", "Cỡ", "Size");
-    sizeLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
-    auto* fpsLabel = new QLabel(QStringLiteral("FPS"), inputBank);
-    fpsLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
-    auto* pgmViewLabel = new QLabel(QStringLiteral("PGM"), inputBank);
-    pgmViewLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
-    m_catalogThumbnailSize = new QComboBox(inputBank);
+    m_typeLabel = new QLabel(QStringLiteral("Type"), m_inputToolbarWidget);
+    bindLocalizedProperty(m_typeLabel, "text", "Loại", "Type");
+    m_typeLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
+    m_sizeLabel = new QLabel(QStringLiteral("Size"), m_inputToolbarWidget);
+    bindLocalizedProperty(m_sizeLabel, "text", "Cỡ", "Size");
+    m_sizeLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
+    m_fpsLabel = new QLabel(QStringLiteral("FPS"), m_inputToolbarWidget);
+    m_fpsLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
+    m_programViewLabel = new QLabel(QStringLiteral("VIEW"), m_inputToolbarWidget);
+    m_programViewLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
+    m_catalogThumbnailSize = new QComboBox(m_inputToolbarWidget);
     m_catalogThumbnailSize->addItem(QStringLiteral("Small"), 110);
     m_catalogThumbnailSize->addItem(QStringLiteral("Normal"), 192);
     m_catalogThumbnailSize->addItem(QStringLiteral("Large"), 220);
     m_catalogThumbnailSize->setCurrentIndex(1);
-    m_sourceTypeFilter = new QComboBox(inputBank);
+    m_sourceTypeFilter = new QComboBox(m_inputToolbarWidget);
     m_sourceTypeFilter->addItem(QStringLiteral("All types"), -1);
     m_sourceTypeFilter->addItem(QStringLiteral("Video"), static_cast<int>(ObsCatalogSourceType::VideoFile));
     m_sourceTypeFilter->addItem(QStringLiteral("Audio"), static_cast<int>(ObsCatalogSourceType::AudioFile));
     m_sourceTypeFilter->addItem(QStringLiteral("Images"), static_cast<int>(ObsCatalogSourceType::ImageFile));
     m_sourceTypeFilter->addItem(QStringLiteral("RTSP cameras"), static_cast<int>(ObsCatalogSourceType::RtspCamera));
     m_sourceTypeFilter->addItem(QStringLiteral("Blank"), static_cast<int>(ObsCatalogSourceType::ColorBlank));
-    m_projectFrameRate = new QComboBox(inputBank);
+    m_projectFrameRate = new QComboBox(m_inputToolbarWidget);
     m_projectFrameRate->setFixedWidth(88);
     const QStringList frameRateLabels{
         QStringLiteral("23.976"), QStringLiteral("24"), QStringLiteral("25"), QStringLiteral("29.97"),
@@ -344,7 +353,7 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     bindLocalizedProperty(m_projectFrameRate, "toolTip",
                           "FPS dự án cho toàn bộ PVW, PGM và output",
                           "Project FPS for PVW, PGM and output");
-    m_programRenderMode = new QComboBox(inputBank);
+    m_programRenderMode = new QComboBox(m_inputToolbarWidget);
     m_programRenderMode->setFixedWidth(88);
     m_programRenderMode->addItem(QStringLiteral("Default"), static_cast<int>(ObsRenderMode::AspectFit));
     m_programRenderMode->addItem(QStringLiteral("Fit"), static_cast<int>(ObsRenderMode::FitToScreen));
@@ -355,10 +364,10 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
                           "Default: preserve the original aspect ratio. Fit: stretch to fill the entire screen.");
     connect(m_programRenderMode, &QComboBox::currentIndexChanged,
             this, &ObsDualMediaTestWindow::setProgramRenderMode);
-    auto* languageLabel = new QLabel(QStringLiteral("LANG"), inputBank);
-    bindLocalizedProperty(languageLabel, "text", "NN", "LANG");
-    languageLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
-    m_languageSelector = new QComboBox(inputBank);
+    m_languageLabel = new QLabel(QStringLiteral("LANG"), m_inputToolbarWidget);
+    bindLocalizedProperty(m_languageLabel, "text", "NN", "LANG");
+    m_languageLabel->setStyleSheet(QStringLiteral("color: #b8c5ce; border: 0;"));
+    m_languageSelector = new QComboBox(m_inputToolbarWidget);
     m_languageSelector->setFixedWidth(58);
     m_languageSelector->addItem(QStringLiteral("VN"), QStringLiteral("vi"));
     m_languageSelector->addItem(QStringLiteral("EN"), QStringLiteral("en"));
@@ -369,17 +378,17 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     inputToolbar->addWidget(m_openPlaylistButton);
     inputToolbar->addWidget(m_playlistPreviousButton);
     inputToolbar->addWidget(m_playlistNextButton);
-    inputToolbar->addWidget(typeLabel);
+    inputToolbar->addWidget(m_typeLabel);
     inputToolbar->addWidget(m_sourceTypeFilter);
-    inputToolbar->addWidget(sizeLabel);
+    inputToolbar->addWidget(m_sizeLabel);
     inputToolbar->addWidget(m_catalogThumbnailSize);
-    inputToolbar->addWidget(fpsLabel);
+    inputToolbar->addWidget(m_fpsLabel);
     inputToolbar->addWidget(m_projectFrameRate);
-    inputToolbar->addWidget(pgmViewLabel);
+    inputToolbar->addWidget(m_programViewLabel);
     inputToolbar->addWidget(m_programRenderMode);
-    inputToolbar->addWidget(languageLabel);
+    inputToolbar->addWidget(m_languageLabel);
     inputToolbar->addWidget(m_languageSelector);
-    inputBankLayout->addLayout(inputToolbar);
+    inputBankLayout->addWidget(m_inputToolbarWidget);
     m_sourceCatalogList = new QListWidget(inputBank);
     m_sourceCatalogList->setViewMode(QListView::IconMode);
     m_sourceCatalogList->setFlow(QListView::LeftToRight);
@@ -403,7 +412,26 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     m_processMetricsLabel->setStyleSheet(QStringLiteral(
         "QLabel { background: #11171c; color: #76d7ea; border: 1px solid #34434d; "
         "padding: 4px 8px; font-family: 'Consolas', 'Courier New', monospace; font-weight: bold; }"));
-    rootLayout->addWidget(m_processMetricsLabel);
+
+    m_copyrightButton = new QPushButton(this);
+    m_copyrightButton->setFlat(true);
+    m_copyrightButton->setMinimumHeight(26);
+    m_copyrightButton->setMaximumWidth(360);
+    m_copyrightButton->setCursor(Qt::PointingHandCursor);
+    m_copyrightButton->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #11171c; color: #8bd49c; border: 1px solid #34434d; "
+        "padding: 4px 10px; font-size: 11px; font-weight: bold; text-align: right; }"
+        "QPushButton:hover { color: #74e8ef; border-color: #53a9c6; text-decoration: underline; }"
+        "QPushButton:pressed { background: #1d2a31; }"));
+    connect(m_copyrightButton, &QPushButton::clicked, this, &ObsDualMediaTestWindow::showAboutDialog);
+    updateCopyrightDisplay();
+
+    auto* footerLayout = new QHBoxLayout();
+    footerLayout->setContentsMargins(0, 0, 0, 0);
+    footerLayout->setSpacing(6);
+    footerLayout->addWidget(m_processMetricsLabel, 1);
+    footerLayout->addWidget(m_copyrightButton, 0);
+    rootLayout->addLayout(footerLayout);
 
     connect(m_quickPlayButton, &QPushButton::clicked, this, [this] { promotePreviewToProgram("Quick Play"); });
     connect(m_cutButton, &QPushButton::clicked, this, [this] { promotePreviewToProgram("CUT"); });
@@ -559,6 +587,7 @@ void ObsDualMediaTestWindow::applyLanguage() {
         m_programRenderMode->setItemText(0, localized("Mặc định", "Default"));
         m_programRenderMode->setItemText(1, localized("Vừa màn hình", "Fit"));
     }
+    updateInputToolbarPresentation();
 
     if (m_sourceCatalog) refreshCatalogUi();
     refreshPlaylistButtonUi();
@@ -569,6 +598,7 @@ void ObsDualMediaTestWindow::applyLanguage() {
     }
     updatePanel(m_preview, QStringLiteral("PVW"));
     updatePanel(m_program, QStringLiteral("PGM"));
+    updateCopyrightDisplay();
     updateProcessMetrics();
 }
 
@@ -909,6 +939,8 @@ void ObsDualMediaTestWindow::resizeDisplay(Panel& panel) {
 void ObsDualMediaTestWindow::updateMonitorLayout() {
     if (!m_switcherArea || !m_preview.videoContainer || !m_program.videoContainer) return;
 
+    updateInputToolbarPresentation();
+
     constexpr int transitionRailWidth = 116;
     constexpr int horizontalSpacing = 8;
     // Header, margins, gaps and the dedicated native transport bar.  The
@@ -923,6 +955,143 @@ void ObsDualMediaTestWindow::updateMonitorLayout() {
     if (m_preview.videoContainer->height() != videoHeight) m_preview.videoContainer->setFixedHeight(videoHeight);
     if (m_program.videoContainer->height() != videoHeight) m_program.videoContainer->setFixedHeight(videoHeight);
     if (m_switcherArea->height() != switcherHeight) m_switcherArea->setFixedHeight(switcherHeight);
+}
+
+void ObsDualMediaTestWindow::updateInputToolbarPresentation() {
+    if (!m_inputToolbarWidget || !m_addSourceButton || !m_openPlaylistButton ||
+        !m_sourceTypeFilter || !m_catalogThumbnailSize || !m_projectFrameRate ||
+        !m_programRenderMode || !m_languageSelector || !m_typeLabel || !m_sizeLabel ||
+        !m_fpsLabel || !m_programViewLabel) {
+        return;
+    }
+
+    // Giữ nguyên bố cục chuẩn FHD; chỉ tinh gọn thanh công cụ ở màn hình
+    // landscape nhỏ, nơi các nhãn riêng làm giao diện chật và rối.
+    const bool compactLandscape = width() < 1600 && height() < width();
+    for (QLabel* label : {m_typeLabel, m_sizeLabel, m_fpsLabel, m_programViewLabel}) {
+        if (!label) continue;
+        label->setVisible(true);
+        label->setStyleSheet(compactLandscape
+            ? QStringLiteral("color: #82939e; border: 0; font-size: 9px; font-weight: 600; letter-spacing: 0.5px;")
+            : QStringLiteral("color: #b8c5ce; border: 0;"));
+    }
+    m_typeLabel->setText(localized("LOẠI", "TYPE"));
+    m_sizeLabel->setText(localized("CỠ", "SIZE"));
+    m_fpsLabel->setText(QStringLiteral("FPS"));
+    m_programViewLabel->setText(localized("HIỂN THỊ", "VIEW"));
+    if (m_languageLabel) m_languageLabel->setVisible(!compactLandscape);
+
+    const auto setWidth = [](QWidget* widget, int compactWidth, int standardWidth = 0) {
+        if (!widget) return;
+        if (compactWidth > 0) {
+            widget->setFixedWidth(compactWidth);
+        } else if (standardWidth > 0) {
+            widget->setFixedWidth(standardWidth);
+        } else {
+            widget->setMinimumWidth(0);
+            widget->setMaximumWidth(QWIDGETSIZE_MAX);
+        }
+    };
+
+    if (compactLandscape) {
+        m_inputToolbarWidget->setStyleSheet(QStringLiteral(R"(
+            QWidget#inputToolbar { background: transparent; border: 0; }
+            QWidget#inputToolbar QPushButton,
+            QWidget#inputToolbar QComboBox {
+                min-height: 30px;
+                max-height: 30px;
+                background: #26333d;
+                color: #eef5f8;
+                border: 1px solid #405563;
+                border-radius: 6px;
+                padding: 0 10px;
+                font-size: 11px;
+            }
+            QWidget#inputToolbar QPushButton:hover,
+            QWidget#inputToolbar QComboBox:hover {
+                background: #304451;
+                border-color: #4f91a8;
+            }
+            QWidget#inputToolbar QPushButton:pressed,
+            QWidget#inputToolbar QComboBox:focus {
+                background: #1d2a32;
+                border-color: #55c7df;
+            }
+            QWidget#inputToolbar QComboBox::drop-down {
+                width: 22px;
+                border: 0;
+            }
+        )"));
+        m_addSourceButton->setText(localized("＋ Nguồn", "＋ Input"));
+        m_openPlaylistButton->setText(localized("Danh sách", "Playlist"));
+        if (m_sourceTypeFilter->count() >= 6) {
+            m_sourceTypeFilter->setItemText(0, localized("Tất cả", "All types"));
+            m_sourceTypeFilter->setItemText(1, QStringLiteral("Video"));
+            m_sourceTypeFilter->setItemText(2, localized("Âm thanh", "Audio"));
+            m_sourceTypeFilter->setItemText(3, localized("Hình ảnh", "Images"));
+            m_sourceTypeFilter->setItemText(4, QStringLiteral("RTSP"));
+            m_sourceTypeFilter->setItemText(5, localized("Nền", "Blank"));
+        }
+        if (m_catalogThumbnailSize->count() >= 3) {
+            m_catalogThumbnailSize->setItemText(0, localized("Nhỏ", "Small"));
+            m_catalogThumbnailSize->setItemText(1, localized("Vừa", "Normal"));
+            m_catalogThumbnailSize->setItemText(2, localized("Lớn", "Large"));
+        }
+        const QStringList compactFrameRateLabels{
+            QStringLiteral("23.976"), QStringLiteral("24"), QStringLiteral("25"), QStringLiteral("29.97"),
+            QStringLiteral("30"), QStringLiteral("50"), QStringLiteral("59.94"), QStringLiteral("60"),
+        };
+        for (int index = 0; index < std::min(m_projectFrameRate->count(), static_cast<int>(compactFrameRateLabels.size())); ++index) {
+            m_projectFrameRate->setItemText(index, compactFrameRateLabels.at(index));
+        }
+        m_programRenderMode->setItemText(0, localized("Mặc định", "Default"));
+        m_programRenderMode->setItemText(1, localized("Vừa", "Fit"));
+        setWidth(m_addSourceButton, 104);
+        setWidth(m_openPlaylistButton, 82);
+        setWidth(m_sourceTypeFilter, 102);
+        setWidth(m_catalogThumbnailSize, 96);
+        setWidth(m_projectFrameRate, 88);
+        setWidth(m_programRenderMode, 102);
+        setWidth(m_languageSelector, 58);
+    } else {
+        m_inputToolbarWidget->setStyleSheet(QString());
+        m_addSourceButton->setText(localized("Thêm nguồn", "Add Input"));
+        m_openPlaylistButton->setText(localized("Danh sách", "Playlist"));
+        if (m_sourceTypeFilter->count() >= 6) {
+            m_sourceTypeFilter->setItemText(0, localized("Tất cả", "All types"));
+            m_sourceTypeFilter->setItemText(1, QStringLiteral("Video"));
+            m_sourceTypeFilter->setItemText(2, localized("Âm thanh", "Audio"));
+            m_sourceTypeFilter->setItemText(3, localized("Hình ảnh", "Images"));
+            m_sourceTypeFilter->setItemText(4, localized("Camera RTSP", "RTSP cameras"));
+            m_sourceTypeFilter->setItemText(5, localized("Nền trống", "Blank"));
+        }
+        if (m_catalogThumbnailSize->count() >= 3) {
+            m_catalogThumbnailSize->setItemText(0, localized("Nhỏ", "Small"));
+            m_catalogThumbnailSize->setItemText(1, localized("Vừa", "Normal"));
+            m_catalogThumbnailSize->setItemText(2, localized("Lớn", "Large"));
+        }
+        const QStringList standardFrameRateLabels{
+            QStringLiteral("23.976"), QStringLiteral("24"), QStringLiteral("25"), QStringLiteral("29.97"),
+            QStringLiteral("30"), QStringLiteral("50"), QStringLiteral("59.94"), QStringLiteral("60"),
+        };
+        for (int index = 0; index < std::min(m_projectFrameRate->count(), static_cast<int>(standardFrameRateLabels.size())); ++index) {
+            m_projectFrameRate->setItemText(index, standardFrameRateLabels.at(index));
+        }
+        m_programRenderMode->setItemText(0, localized("Mặc định", "Default"));
+        m_programRenderMode->setItemText(1, localized("Vừa màn hình", "Fit"));
+        setWidth(m_addSourceButton, 0);
+        setWidth(m_openPlaylistButton, 0);
+        setWidth(m_sourceTypeFilter, 0);
+        setWidth(m_catalogThumbnailSize, 0);
+        setWidth(m_projectFrameRate, 88);
+        setWidth(m_programRenderMode, 88);
+        setWidth(m_languageSelector, 58);
+    }
+
+    m_sourceTypeFilter->setToolTip(localized("Lọc theo loại nguồn", "Filter by source type"));
+    m_catalogThumbnailSize->setToolTip(localized("Kích thước hình thu nhỏ", "Thumbnail size"));
+    m_programRenderMode->setToolTip(localized(
+        "Chế độ hiển thị của Program", "Program display mode"));
 }
 
 void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
@@ -1071,6 +1240,30 @@ void ObsDualMediaTestWindow::updateProcessMetrics() {
             .arg(sourceCount)
             .arg(activeDecoders)
             .arg(uptime));
+}
+
+void ObsDualMediaTestWindow::updateCopyrightDisplay() {
+    if (!m_copyrightButton) return;
+
+    const CopyrightInfo info = CopyrightSettings::load();
+    const QString fullText = info.footerText.isEmpty()
+        ? localized("Thông tin bản quyền", "Copyright information")
+        : info.footerText;
+    m_copyrightButton->setText(
+        m_copyrightButton->fontMetrics().elidedText(fullText, Qt::ElideRight, 330));
+    m_copyrightButton->setToolTip(
+        QStringLiteral("%1\n%2")
+            .arg(fullText,
+                 localized("Nhấn để xem hoặc chỉnh sửa thông tin bản quyền.",
+                           "Click to view or edit copyright information.")));
+    m_copyrightButton->setAccessibleName(
+        localized("Thông tin bản quyền", "Copyright information"));
+}
+
+void ObsDualMediaTestWindow::showAboutDialog() {
+    AboutDialog dialog(this);
+    dialog.exec();
+    updateCopyrightDisplay();
 }
 
 void ObsDualMediaTestWindow::stagePreviewSource(const ObsCatalogSource& source) {
@@ -2018,7 +2211,8 @@ void ObsDualMediaTestWindow::refreshPlaylistButtonUi() {
     }
 
     if (m_playlistMode) {
-        m_openPlaylistButton->setText(localized("Dừng Playlist", "Stop Playlist"));
+        m_openPlaylistButton->setText(localized("Dừng DS", "Stop Playlist"));
+        m_openPlaylistButton->setToolTip(localized("Dừng danh sách phát", "Stop playlist"));
         m_openPlaylistButton->setStyleSheet(QStringLiteral(
             "QPushButton { background: #9f2636; color: #ffffff; border: 1px solid #ff8794; font-weight: bold; }"
             "QPushButton:hover { background: #c43146; }"
@@ -2027,7 +2221,8 @@ void ObsDualMediaTestWindow::refreshPlaylistButtonUi() {
     }
 
     if (!m_playlist->empty()) {
-        m_openPlaylistButton->setText(localized("Phát Playlist", "Play Playlist"));
+        m_openPlaylistButton->setText(localized("Phát DS", "Play Playlist"));
+        m_openPlaylistButton->setToolTip(localized("Phát danh sách", "Play playlist"));
         m_openPlaylistButton->setStyleSheet(QStringLiteral(
             "QPushButton { background: #168044; color: #ffffff; border: 1px solid #55c47f; font-weight: bold; }"
             "QPushButton:hover { background: #1b9952; }"
@@ -2035,7 +2230,8 @@ void ObsDualMediaTestWindow::refreshPlaylistButtonUi() {
         return;
     }
 
-    m_openPlaylistButton->setText(QStringLiteral("Playlist"));
+    m_openPlaylistButton->setText(localized("Danh sách", "Playlist"));
+    m_openPlaylistButton->setToolTip(localized("Mở trình quản lý danh sách phát", "Open playlist manager"));
     m_openPlaylistButton->setStyleSheet(QString());
 }
 
@@ -2057,11 +2253,11 @@ void ObsDualMediaTestWindow::refreshPlaylistUi() {
     }
 
     if (editing) {
-        m_playlistStatus->setText(itemCount == 0 ? localized("Playlist: Trống", "Playlist: Empty")
-            : localized("Playlist: Đang chỉnh sửa | %1 mục", "Playlist: Editing | %1 item(s)").arg(itemCount));
+        m_playlistStatus->setText(itemCount == 0 ? localized("Danh sách: Trống", "Playlist: Empty")
+            : localized("Danh sách: Đang chỉnh sửa | %1 mục", "Playlist: Editing | %1 item(s)").arg(itemCount));
     } else {
-        m_playlistStatus->setText(m_playlist->empty() ? localized("Playlist: Trống", "Playlist: Empty")
-            : localized("Playlist: %1 | Chỉ PGM %2/%3", "Playlist: %1 | PGM-only %2/%3")
+        m_playlistStatus->setText(m_playlist->empty() ? localized("Danh sách: Trống", "Playlist: Empty")
+            : localized("Danh sách: %1 | Chỉ PGM %2/%3", "Playlist: %1 | PGM-only %2/%3")
                 .arg(m_playlistMode ? localized("Đang chạy", "Running") : localized("Sẵn sàng", "Ready"))
                 .arg(m_playlist->currentIndex() + 1).arg(m_playlist->size()));
     }
@@ -2070,7 +2266,7 @@ void ObsDualMediaTestWindow::refreshPlaylistUi() {
 void ObsDualMediaTestWindow::showPlaylistManager() {
     if (!m_playlistDialog) {
         m_playlistDialog = new QDialog(this);
-        bindLocalizedProperty(m_playlistDialog, "windowTitle", "Quản lý OBS Playlist", "OBS Playlist Manager");
+        bindLocalizedProperty(m_playlistDialog, "windowTitle", "Quản lý danh sách phát OBS", "OBS Playlist Manager");
         m_playlistDialog->resize(760, 470);
         auto* layout = new QVBoxLayout(m_playlistDialog);
         auto* columns = new QHBoxLayout();
@@ -2095,7 +2291,7 @@ void ObsDualMediaTestWindow::showPlaylistManager() {
 
         auto* playlistColumn = new QVBoxLayout();
         auto* playlistLabel = new QLabel(m_playlistDialog);
-        bindLocalizedProperty(playlistLabel, "text", "Playlist PGM", "PGM Playlist");
+        bindLocalizedProperty(playlistLabel, "text", "Danh sách phát PGM", "PGM Playlist");
         playlistColumn->addWidget(playlistLabel);
         m_playlistList = new QListWidget(m_playlistDialog);
         playlistColumn->addWidget(m_playlistList, 1);
@@ -2113,7 +2309,7 @@ void ObsDualMediaTestWindow::showPlaylistManager() {
         auto* footer = new QHBoxLayout();
         m_playlistLoop = new QCheckBox(QStringLiteral("Loop Playlist"), m_playlistDialog);
         m_autoNext = new QCheckBox(QStringLiteral("Auto Next"), m_playlistDialog);
-        bindLocalizedProperty(m_playlistLoop, "text", "Lặp Playlist", "Loop Playlist");
+        bindLocalizedProperty(m_playlistLoop, "text", "Lặp danh sách", "Loop Playlist");
         bindLocalizedProperty(m_autoNext, "text", "Tự động tiếp", "Auto Next");
         m_playlistLoop->setChecked(m_playlist->isLooping());
         m_autoNext->setChecked(m_playlist->isAutoNext());

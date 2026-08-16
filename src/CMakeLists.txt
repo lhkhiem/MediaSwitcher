@@ -13,11 +13,14 @@ link_directories(${FFMPEG_LIB_DIR})
 set(SOURCES
     main.cpp
     resource.rc
+    resources.qrc
     common/logger/Logger.cpp
     common/logger/Logger.h
     common/config/Config.cpp
     common/config/Config.h
     common/config/AppInfo.h
+    common/config/CopyrightSettings.cpp
+    common/config/CopyrightSettings.h
     app/WorkspaceManager.cpp
     app/WorkspaceManager.h
     ui/MainWindow.cpp

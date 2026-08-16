@@ -115,9 +115,12 @@ private:
     void destroyDisplay(Panel& panel);
     void resizeDisplay(Panel& panel);
     void updateMonitorLayout();
+    void updateInputToolbarPresentation();
     void updatePanel(Panel& panel, const QString& role);
     void updateAudioMeters();
     void updateProcessMetrics();
+    void updateCopyrightDisplay();
+    void showAboutDialog();
     QString localized(const char* vietnamese, const char* english) const;
     void bindLocalizedProperty(QObject* object, const char* propertyName, const char* vietnamese, const char* english);
     void applyLanguage();
@@ -182,6 +185,7 @@ private:
     QTimer* m_audioMeterTimer{nullptr};
     QTimer* m_processMetricsTimer{nullptr};
     QLabel* m_processMetricsLabel{nullptr};
+    QPushButton* m_copyrightButton{nullptr};
     QTimer* m_stagedSeekTimer{nullptr};
     QPushButton* m_quickPlayButton{nullptr};
     QPushButton* m_cutButton{nullptr};
@@ -207,6 +211,12 @@ private:
     QDialog* m_playlistDialog{nullptr};
     QWidget* m_switcherArea{nullptr};
     QWidget* m_inputBank{nullptr};
+    QWidget* m_inputToolbarWidget{nullptr};
+    QLabel* m_typeLabel{nullptr};
+    QLabel* m_sizeLabel{nullptr};
+    QLabel* m_fpsLabel{nullptr};
+    QLabel* m_programViewLabel{nullptr};
+    QLabel* m_languageLabel{nullptr};
     std::unordered_map<uint64_t, QPixmap> m_sourceThumbnails;
     std::unordered_map<uint64_t, QLabel*> m_catalogThumbnailLabels;
     std::unordered_map<uint64_t, PlaybackSnapshot> m_lastProgramSnapshots;

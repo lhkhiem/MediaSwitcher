@@ -6,6 +6,7 @@
 #include "ui/AudioMeterWidget.h"
 #include "ui/AboutDialog.h"
 #include "common/config/AppInfo.h"
+#include "common/config/CopyrightSettings.h"
 #include "engine/input/GlobalPlaylistController.h"
 #include "engine/audio/AudioEngine.h"
 #include "engine/diagnostics/MediaDiagnostics.h"
@@ -1052,11 +1053,11 @@ void MainWindow::setupUi() {
 
     statusBar()->showMessage("MediaSwitcher LED Engine Ready. Dual Viewports Live.");
 
-    QPushButton* copyrightBtn = new QPushButton(QString("© %1").arg(AppInfo::COPYRIGHT), this);
-    copyrightBtn->setFlat(true);
-    copyrightBtn->setCursor(Qt::PointingHandCursor);
-    copyrightBtn->setToolTip("Click để xem chi tiết thông tin Tác giả & Bản quyền phần mềm");
-    copyrightBtn->setStyleSheet(R"(
+    m_copyrightBtn = new QPushButton(this);
+    m_copyrightBtn->setFlat(true);
+    m_copyrightBtn->setCursor(Qt::PointingHandCursor);
+    m_copyrightBtn->setMaximumWidth(420);
+    m_copyrightBtn->setStyleSheet(R"(
         QPushButton {
             color: #81C784;
             font-weight: bold;
@@ -1069,12 +1070,26 @@ void MainWindow::setupUi() {
             text-decoration: underline;
         }
     )");
-    connect(copyrightBtn, &QPushButton::clicked, this, &MainWindow::onShowAboutDialog);
+    connect(m_copyrightBtn, &QPushButton::clicked, this, &MainWindow::onShowAboutDialog);
+    updateCopyrightDisplay();
     m_metricsLabel = new QLabel(this);
     m_metricsLabel->setStyleSheet("QLabel { color: #4FC3F7; font-weight: bold; font-size: 11px; margin-right: 16px; }");
     statusBar()->addPermanentWidget(m_metricsLabel);
 
-    statusBar()->addPermanentWidget(copyrightBtn);
+    statusBar()->addPermanentWidget(m_copyrightBtn);
+}
+
+void MainWindow::updateCopyrightDisplay() {
+    if (!m_copyrightBtn) {
+        return;
+    }
+
+    const CopyrightInfo info = CopyrightSettings::load();
+    const QString displayText = info.footerText.isEmpty()
+        ? QStringLiteral("Thông tin bản quyền")
+        : info.footerText;
+    m_copyrightBtn->setText(m_copyrightBtn->fontMetrics().elidedText(displayText, Qt::ElideRight, 400));
+    m_copyrightBtn->setToolTip(QStringLiteral("%1\nNhấn để xem hoặc chỉnh sửa thông tin bản quyền.").arg(displayText));
 }
 
 void MainWindow::populateScreenSelector() {
@@ -2155,6 +2170,7 @@ void MainWindow::onMuteToggled() {
 void MainWindow::onShowAboutDialog() {
     AboutDialog dlg(this);
     dlg.exec();
+    updateCopyrightDisplay();
 }
 
 void MainWindow::activatePgmAudio() {

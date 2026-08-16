@@ -2,8 +2,9 @@ THÔNG TIN BẢN QUYỀN
 Tên ứng dụng: MediaSwitcher Studio
 Phiên bản: 1.0.0
 Tác giả: Lê Khiêm
+
 MÔ TẢ
-Phần mềm trình chiếu hình ảnh và video chuyên nghiệp.
+Phần mềm trình chiếu hình ảnh, video, RTSP camera.
 
 GIẤY PHÉP
 Commercial / Proprietary License

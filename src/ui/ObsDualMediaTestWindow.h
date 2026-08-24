@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class QLabel;
@@ -48,6 +49,7 @@ public:
     explicit ObsDualMediaTestWindow(ObsContext& context, QWidget* parent = nullptr);
     ObsDualMediaTestWindow(ObsContext& context, const std::filesystem::path& mediaPath, QWidget* parent = nullptr);
     ~ObsDualMediaTestWindow() override;
+    bool runCueOnlySmokeTest(const std::filesystem::path& mediaPath);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -85,20 +87,24 @@ private:
         std::atomic_bool fadeVideoCompleted{false};
         std::atomic_uint64_t thumbnailSourceId{0};
         std::atomic_bool thumbnailCaptureEnabled{false};
+        std::atomic_bool thumbnailCaptureContinuous{false};
+        std::atomic_bool thumbnailUpdatePending{false};
+        std::atomic_uint64_t thumbnailGeneration{0};
         gs_texrender_t* thumbnailTexrender{nullptr};
         gs_stagesurf_t* thumbnailStages[3]{nullptr, nullptr, nullptr};
+        int64_t thumbnailStagePositionMs[3]{0, 0, 0};
+        int64_t thumbnailStageDurationMs[3]{0, 0, 0};
+        bool thumbnailStageLooping[3]{false, false, false};
         uint32_t thumbnailWriteStage{0};
-        uint32_t thumbnailFrameCounter{0};
-        std::atomic_bool thumbnailFrameDelivered{false};
+        std::atomic_uint32_t thumbnailFrameCounter{0};
+        std::atomic_uint32_t thumbnailStagedFrameCount{0};
         bool sliderDragging{false};
         bool audioMuted{false};
         float volume{1.0f};
     };
 
-    // A cue is the operator-visible PVW state.  It exists independently from
-    // an optional OBS decoder used only when the operator explicitly presses
-    // Play in PVW.  Keeping this separate prevents ffmpeg_source activation
-    // from changing the cue's transport state behind the UI's back.
+    // Snapshot preserves a role's independent timeline while OBS sources are
+    // recreated for TAKE, CUT and FADE operations.
     struct PlaybackSnapshot {
         uint64_t sourceId{0};
         int64_t positionMs{0};
@@ -108,7 +114,8 @@ private:
     };
 
     static void draw(void* parameter, uint32_t width, uint32_t height);
-    static void captureProgramThumbnail(Panel& panel);
+    static void captureSourceThumbnail(Panel& panel);
+    QImage captureBackendStill(const ObsPlaybackBackend& backend) const;
     QWidget* createPanel(Panel& panel, const QString& title, const QString& color);
     bool openPanel(Panel& panel, const std::filesystem::path& mediaPath, bool audioOutput);
     void initializeDisplay(Panel& panel);
@@ -127,17 +134,15 @@ private:
     void setLanguage(int index);
     bool openCatalogSource(ObsPlaybackBackend& backend, uint64_t sourceId, bool startPaused = false);
     void stagePreviewSource(const ObsCatalogSource& source);
-    void stagePreviewAtPosition(const std::filesystem::path& path, uint64_t sourceId, int64_t positionMs);
-    void requestStagedPreviewFrame();
-    void showStagedPreviewFrame(int64_t positionMs, int64_t durationMs, const QImage& frame);
-    void showProgramThumbnail(uint64_t sourceId, const QImage& frame);
+    void updateStagedPreviewFrame();
     bool openStagedPreview(bool play);
+    void showSourceThumbnail(uint64_t sourceId, const QImage& frame,
+                             const PlaybackSnapshot& snapshot = {}, bool timelineFrame = false);
     PlaybackSnapshot capturePreviewSnapshot() const;
     PlaybackSnapshot captureProgramSnapshot() const;
     PlaybackSnapshot previewSnapshotForSource(const ObsCatalogSource& source) const;
     void rememberProgramSnapshot(const PlaybackSnapshot& snapshot);
     void stagePreviewSnapshot(const PlaybackSnapshot& snapshot);
-    void clearStagedPreviewMetadata();
     void clearPreviewSource();
     void clearProgramSource();
     bool isCatalogSourceAvailable(uint64_t sourceId) const;
@@ -145,6 +150,8 @@ private:
     void togglePanelLoop(Panel& panel);
     void resetPanel(Panel& panel);
     void seekPanel(Panel& panel, int64_t deltaMs);
+    void requestStagedPreviewSeek(int64_t positionMs);
+    void applyStagedPreviewSeek();
     bool promotePreviewToProgram(const char* operation);
     bool fadePreviewToProgram();
     void finishFadeIfComplete();
@@ -165,7 +172,7 @@ private:
     void setCatalogThumbnailSize(int width);
     void setProjectFrameRate(int index);
     void setProgramRenderMode(int index);
-    void setProgramSourceId(uint64_t sourceId);
+    void setProgramSourceId(uint64_t sourceId, bool refreshCatalog = true);
     void refreshPlaylistButtonUi();
     void refreshPlaylistUi();
     void showPlaylistManager();
@@ -184,9 +191,9 @@ private:
     QTimer* m_timer{nullptr};
     QTimer* m_audioMeterTimer{nullptr};
     QTimer* m_processMetricsTimer{nullptr};
+    QTimer* m_previewSeekTimer{nullptr};
     QLabel* m_processMetricsLabel{nullptr};
     QPushButton* m_copyrightButton{nullptr};
-    QTimer* m_stagedSeekTimer{nullptr};
     QPushButton* m_quickPlayButton{nullptr};
     QPushButton* m_cutButton{nullptr};
     QPushButton* m_fadeButton{nullptr};
@@ -217,25 +224,33 @@ private:
     QLabel* m_fpsLabel{nullptr};
     QLabel* m_programViewLabel{nullptr};
     QLabel* m_languageLabel{nullptr};
+    std::unordered_map<uint64_t, QPixmap> m_sourcePosters;
     std::unordered_map<uint64_t, QPixmap> m_sourceThumbnails;
+    std::unordered_map<uint64_t, QPixmap> m_sourceTimelineFrames;
     std::unordered_map<uint64_t, QLabel*> m_catalogThumbnailLabels;
+    std::unordered_map<uint64_t, PlaybackSnapshot> m_sourceThumbnailSnapshots;
+    std::unordered_map<uint64_t, PlaybackSnapshot> m_sourceTimelineFrameSnapshots;
+    std::unordered_set<uint64_t> m_sourcesWithTimelineThumbnail;
+    std::unordered_map<uint64_t, std::unique_ptr<ObsPlaybackBackend>> m_pausedSourceRuntimes;
     std::unordered_map<uint64_t, PlaybackSnapshot> m_lastProgramSnapshots;
-    std::filesystem::path m_stagedPreviewPath;
-    uint64_t m_stagedPreviewSourceId{0};
+    QPixmap m_stagedPreviewFrame;
+    uint64_t m_stagedPreviewFrameSourceId{0};
     uint64_t m_previewSourceId{0};
-    int64_t m_stagedPreviewPositionMs{0};
-    int64_t m_stagedPreviewDurationMs{0};
-    bool m_stagedPreviewLoop{false};
     uint64_t m_programSourceId{0};
     uint64_t m_fadeOutgoingSourceId{0};
+    uint64_t m_previewSeekGeneration{0};
     int m_catalogThumbnailWidth{160};
     bool m_closing{false};
     bool m_fadeActive{false};
     bool m_fadeCleanupQueued{false};
+    bool m_previewTransportStarted{false};
+    bool m_previewRuntimeMatchesStagedFrame{false};
+    bool m_layoutRefreshQueued{false};
     bool m_playlistMode{false};
     bool m_playlistEditing{false};
     UiLanguage m_language{UiLanguage::Vietnamese};
     ObsRenderMode m_selectedProgramRenderMode;
     std::vector<uint64_t> m_playlistDraft;
     PlaybackSnapshot m_fadeOutgoingSnapshot;
+    PlaybackSnapshot m_stagedPreviewSnapshot;
 };

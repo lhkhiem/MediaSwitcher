@@ -1,5 +1,4 @@
 #include "AudioMeterWidget.h"
-#include "engine/audio/AudioEngine.h"
 #include <QPainter>
 #include <QLinearGradient>
 #include <algorithm>
@@ -18,19 +17,12 @@ float amplitudeToMeter(float amplitude) {
 }
 }
 
-AudioMeterWidget::AudioMeterWidget(QWidget* parent, bool autoReadAudioEngine)
+AudioMeterWidget::AudioMeterWidget(QWidget* parent)
     : QWidget(parent)
 {
     setMinimumSize(45, 110);
     setMaximumWidth(70);
     m_elapsed.start();
-
-    if (autoReadAudioEngine) {
-        m_timer = new QTimer(this);
-        m_timer->setTimerType(Qt::PreciseTimer);
-        connect(m_timer, &QTimer::timeout, this, &AudioMeterWidget::updateMeters);
-        m_timer->start(16); // ~60 FPS cho meter phản hồi sát âm thanh.
-    }
 }
 
 void AudioMeterWidget::setLevels(float leftPeak, float rightPeak) {
@@ -84,11 +76,6 @@ void AudioMeterWidget::reset() {
     m_leftPeakHoldMs = 0.0f;
     m_rightPeakHoldMs = 0.0f;
     update();
-}
-
-void AudioMeterWidget::updateMeters() {
-    // Read real-time peak levels from AudioEngine (XAudio2 output)
-    setLevels(AudioEngine::instance().getLeftPeak(), AudioEngine::instance().getRightPeak());
 }
 
 void AudioMeterWidget::paintEvent(QPaintEvent* event) {

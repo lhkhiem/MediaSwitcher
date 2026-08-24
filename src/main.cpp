@@ -1,28 +1,23 @@
 #include "common/logger/Logger.h"
 #include "common/config/AppInfo.h"
 #include "app/WorkspaceManager.h"
-#include "ui/MainWindow.h"
-#include "engine/audio/AudioEngine.h"
 #include "engine/diagnostics/MediaDiagnostics.h"
-#ifdef MEDIASWITCHER_ENABLE_OBS
 #include "engine/obs/ObsContext.h"
 #include "engine/obs/ObsPlaybackBackend.h"
+#include "engine/obs/ObsThumbnailService.h"
 #include "ui/ObsDualMediaTestWindow.h"
 #include "ui/ObsMediaTestWindow.h"
-#endif
 
 #include <QApplication>
 #include <QEventLoop>
 #include <QIcon>
 #include <QTimer>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <filesystem>
+#include <unordered_set>
 
-#ifdef _WIN32
-#include <windows.h>
-#define IDI_APPICON 101
-#endif
-
-#ifdef MEDIASWITCHER_ENABLE_OBS
 namespace {
 QString obsMediaTestPath(const QStringList& arguments) {
     const QString prefix = QStringLiteral("--obs-media-test=");
@@ -56,13 +51,28 @@ QString obsFpsSmokeTestPath(const QStringList& arguments) {
     return {};
 }
 
+QString obsThumbnailSmokeTestPath(const QStringList& arguments) {
+    const QString prefix = QStringLiteral("--obs-thumbnail-smoke-test=");
+    for (const QString& argument : arguments) {
+        if (argument.startsWith(prefix)) return argument.mid(prefix.size());
+    }
+    return {};
+}
+
+QString obsCueOnlySmokeTestPath(const QStringList& arguments) {
+    const QString prefix = QStringLiteral("--obs-cue-only-smoke-test=");
+    for (const QString& argument : arguments) {
+        if (argument.startsWith(prefix)) return argument.mid(prefix.size());
+    }
+    return {};
+}
+
 void waitForObsLifecycle(int milliseconds) {
     QEventLoop loop;
     QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
     loop.exec();
 }
 }
-#endif
 
 int main(int argc, char* argv[]) {
     Logger::init();
@@ -84,11 +94,12 @@ int main(int argc, char* argv[]) {
     if (appIcon.isNull()) appIcon = QIcon(":/app_icon.ico");
     if (!appIcon.isNull()) app.setWindowIcon(appIcon);
 
-#ifdef MEDIASWITCHER_ENABLE_OBS
     const QString mediaTestPath = obsMediaTestPath(QCoreApplication::arguments());
     const QString dualMediaTestPath = obsDualMediaTestPath(QCoreApplication::arguments());
     const QString pauseSmokeTestPath = obsPauseSmokeTestPath(QCoreApplication::arguments());
     const QString fpsSmokeTestPath = obsFpsSmokeTestPath(QCoreApplication::arguments());
+    const QString thumbnailSmokeTestPath = obsThumbnailSmokeTestPath(QCoreApplication::arguments());
+    const QString cueOnlySmokeTestPath = obsCueOnlySmokeTestPath(QCoreApplication::arguments());
     if (!fpsSmokeTestPath.isEmpty()) {
         LOG_INFO("Startup mode: OBS Project FPS smoke test");
         ObsContext obsContext;
@@ -161,6 +172,68 @@ int main(int argc, char* argv[]) {
         return result;
     }
 
+    if (!cueOnlySmokeTestPath.isEmpty()) {
+        LOG_INFO("Startup mode: OBS cue-only workflow smoke test");
+        ObsContext obsContext;
+        if (!obsContext.initialize()) {
+            LOG_ERROR("OBS cue-only smoke test could not initialize OBS.");
+            return -1;
+        }
+        ObsDualMediaTestWindow testWindow(obsContext);
+        testWindow.show();
+        QApplication::processEvents();
+        const bool passed = testWindow.runCueOnlySmokeTest(
+            std::filesystem::path(cueOnlySmokeTestPath.toStdWString()));
+        LOG_INFO("OBS cue-only workflow smoke: result={}", passed ? "PASS" : "FAIL");
+        return passed ? 0 : 1;
+    }
+
+    if (!thumbnailSmokeTestPath.isEmpty()) {
+        LOG_INFO("Startup mode: OBS thumbnail smoke test");
+        ObsContext obsContext;
+        if (!obsContext.initialize()) {
+            LOG_ERROR("OBS thumbnail smoke test could not initialize OBS.");
+            return -1;
+        }
+
+        bool passed = true;
+        std::unordered_set<quint64> fastCompleted;
+        std::unordered_set<quint64> posterCompleted;
+        int64_t slowestFastThumbnailMs = 0;
+        const auto thumbnailStartedAt = std::chrono::steady_clock::now();
+        QEventLoop loop;
+        const auto connection = QObject::connect(
+            &ObsThumbnailService::instance(), &ObsThumbnailService::thumbnailReady, &loop,
+            [&loop, &passed, &fastCompleted, &posterCompleted, &slowestFastThumbnailMs,
+             thumbnailStartedAt](quint64 sourceId, const QImage& image, qint64 positionMs) {
+                passed = passed && sourceId >= 1 && sourceId <= 3 && !image.isNull() &&
+                    image.width() <= 1280 && image.height() <= 720 && positionMs >= 0;
+                if (image.width() <= 320 && image.height() <= 180) {
+                    fastCompleted.insert(sourceId);
+                    slowestFastThumbnailMs = std::max<int64_t>(slowestFastThumbnailMs,
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - thumbnailStartedAt).count());
+                } else {
+                    posterCompleted.insert(sourceId);
+                }
+                if (posterCompleted.size() == 3) loop.quit();
+            });
+        QTimer::singleShot(6000, &loop, &QEventLoop::quit);
+        const std::filesystem::path thumbnailPath(thumbnailSmokeTestPath.toStdWString());
+        for (uint64_t sourceId = 1; sourceId <= 3; ++sourceId) {
+            ObsThumbnailService::instance().request(sourceId, thumbnailPath, ObsCatalogSourceType::VideoFile);
+        }
+        loop.exec();
+        ObsThumbnailService::instance().waitForDone();
+        QObject::disconnect(connection);
+        passed = passed && fastCompleted.size() == 3 && posterCompleted.size() == 3 &&
+            slowestFastThumbnailMs <= 1000;
+        LOG_INFO("OBS thumbnail smoke: slowest fast tile={} ms; fast={}/3 poster={}/3.",
+                 slowestFastThumbnailMs, fastCompleted.size(), posterCompleted.size());
+        LOG_INFO("OBS thumbnail smoke: result={}", passed ? "PASS" : "FAIL");
+        return passed ? 0 : 1;
+    }
+
     if (!pauseSmokeTestPath.isEmpty()) {
         LOG_INFO("Startup mode: OBS pause smoke test");
         ObsContext obsContext;
@@ -212,40 +285,4 @@ int main(int argc, char* argv[]) {
         LOG_INFO("OBS application exiting with code {}.", result);
         return result;
     }
-#endif
-
-    if (!AudioEngine::instance().initialize()) {
-        LOG_ERROR("Failed to initialize AudioEngine (XAudio2). Audio will be silent.");
-    }
-    MediaDiagnostics::instance().start();
-
-#ifndef MEDIASWITCHER_ENABLE_OBS
-    LOG_INFO("Startup mode: Legacy");
-    LOG_INFO("OBS compiled: no");
-    LOG_INFO("OBS initialized: no");
-#endif
-
-    int result = 0;
-    {
-        MainWindow mainWindow;
-        mainWindow.show();
-
-#ifdef _WIN32
-        const auto hwnd = reinterpret_cast<HWND>(mainWindow.winId());
-        const auto setIcon = [hwnd](int metric, WPARAM size) {
-            HICON icon = static_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APPICON), IMAGE_ICON, metric, metric, LR_SHARED));
-            if (icon) SendMessageW(hwnd, WM_SETICON, size, reinterpret_cast<LPARAM>(icon));
-        };
-        setIcon(GetSystemMetrics(SM_CXICON), ICON_BIG);
-        setIcon(GetSystemMetrics(SM_CXSMICON), ICON_SMALL);
-#endif
-
-        LOG_INFO("MediaSwitcher running.");
-        result = app.exec();
-    }
-
-    MediaDiagnostics::instance().stop();
-    AudioEngine::instance().shutdown();
-    LOG_INFO("MediaSwitcher exiting with code {}", result);
-    return result;
 }

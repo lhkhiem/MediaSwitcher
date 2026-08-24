@@ -1,7 +1,7 @@
 set(OBS_REQUIRED_VERSION "32.1.2")
 
 if (NOT OBS_RUNTIME_ROOT)
-    message(FATAL_ERROR "MEDIASWITCHER_ENABLE_OBS=ON requires OBS_RUNTIME_ROOT to point to a controlled OBS ${OBS_REQUIRED_VERSION} Windows x64 runtime.")
+    message(FATAL_ERROR "OBS_RUNTIME_ROOT must point to a controlled OBS ${OBS_REQUIRED_VERSION} Windows x64 runtime.")
 endif()
 
 get_filename_component(OBS_RUNTIME_ROOT "${OBS_RUNTIME_ROOT}" ABSOLUTE)

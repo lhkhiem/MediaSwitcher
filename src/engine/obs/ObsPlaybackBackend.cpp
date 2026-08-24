@@ -142,19 +142,19 @@ bool ObsPlaybackBackend::openConfiguredSource(const char* sourceType, obs_data_t
     connectAudioCapture();
     LOG_INFO("OBS media: Attaching source to view.");
     obs_view_set_source(m_view, 0, m_source);
+    if (m_pauseRequested.load()) {
+        // Queue pause before the active reference starts ffmpeg_source. The
+        // previous order activated playback first, allowing real files to
+        // visibly advance before the pause command reached the decoder.
+        obs_source_media_play_pause(m_source, true);
+        LOG_INFO("OBS media: Queued initial pause before source activation.");
+    }
     // The active reference keeps ffmpeg_source decoding the first PVW frame.
     // Audio monitoring remains disabled for PVW; this is a decode/render
     // lifetime reference, not an audio route.
     obs_source_inc_active(m_source);
     m_sourceActive = true;
     LOG_INFO("OBS media: Source activated for decode/render: active={}", obs_source_active(m_source));
-    if (m_pauseRequested.load()) {
-        // Queue the pause before ffmpeg_source receives its first automatic
-        // start action. media_started repeats this request only as a guard for
-        // source implementations that finish opening asynchronously.
-        obs_source_media_play_pause(m_source, true);
-        LOG_INFO("OBS media: Queued initial pause before source startup.");
-    }
     LOG_INFO("OBS media: Source attached; enabling audio monitoring.");
     m_path = reference;
     m_audioMonitoringEnabled = m_audioOutputEnabled && m_supportsAudio && setAudioMonitoring(true);
@@ -199,15 +199,22 @@ void ObsPlaybackBackend::close() {
 void ObsPlaybackBackend::play() {
     if (!m_source || !m_supportsTransport) return;
 
+    const ObsPlaybackState currentState = state();
+    const bool restartFromEnd = m_mediaEnded.load() || currentState == ObsPlaybackState::Ended;
     m_pauseRequested.store(false);
     // Recreate the monitor before resuming so it starts from OBS's current media clock.
     if (m_audioOutputEnabled && !setAudioMonitoring(true)) {
         LOG_ERROR("OBS media: Play/resume cancelled because audio monitoring could not be enabled.");
         return;
     }
-    obs_source_media_play_pause(m_source, false);
+    // libobs does not resume ffmpeg_source once it is in ENDED. Restart is the
+    // only valid transition back to PLAYING; a plain play_pause(false) is a
+    // no-op and previously forced operators to click the input tile again.
+    if (restartFromEnd) obs_source_media_restart(m_source);
+    else obs_source_media_play_pause(m_source, false);
     m_mediaEnded.store(false);
-    LOG_INFO("OBS media: Play/resume requested after audio monitor flush.");
+    LOG_INFO("OBS media: {} requested after audio monitor flush.",
+             restartFromEnd ? "Restart from end" : "Play/resume");
 }
 
 void ObsPlaybackBackend::pause() {
@@ -253,9 +260,12 @@ bool ObsPlaybackBackend::seekMs(int64_t milliseconds) {
     if (!m_source || !m_supportsTransport) return false;
     const int64_t duration = durationMs();
     const int64_t target = std::clamp(milliseconds, int64_t{0}, duration > 0 ? duration : milliseconds);
-    m_pendingSeekMs.store(target);
+    const ObsPlaybackState currentState = state();
+    const bool sourceStillOpening = currentState == ObsPlaybackState::Opening ||
+        currentState == ObsPlaybackState::Buffering || currentState == ObsPlaybackState::None;
+    m_pendingSeekMs.store(sourceStillOpening ? target : -1);
     m_pendingSeekAttempts.store(0);
-    const bool resumeAfterSeek = state() == ObsPlaybackState::Playing;
+    const bool resumeAfterSeek = currentState == ObsPlaybackState::Playing;
     setAudioMonitoring(false);
     obs_source_media_set_time(m_source, target);
     m_mediaEnded.store(false);
@@ -318,22 +328,8 @@ void ObsPlaybackBackend::setLooping(bool enabled) {
 void ObsPlaybackBackend::setAudioOutputEnabled(bool enabled) {
     if (m_audioOutputEnabled == enabled) {
         if (!m_source) return;
-        if (!enabled) {
-            setAudioMonitoring(false);
-            if (m_sourceActive) {
-                obs_source_dec_active(m_source);
-                m_sourceActive = false;
-            }
-        } else {
-            if (m_supportsAudio && !m_sourceActive) {
-                obs_source_inc_active(m_source);
-                m_sourceActive = true;
-                LOG_INFO("OBS media: Source activated for Program audio output.");
-            }
-            if (m_supportsAudio && state() == ObsPlaybackState::Playing) {
-                setAudioMonitoring(true);
-            }
-        }
+        if (!enabled) setAudioMonitoring(false);
+        else if (m_supportsAudio && state() == ObsPlaybackState::Playing) setAudioMonitoring(true);
         return;
     }
 
@@ -342,19 +338,13 @@ void ObsPlaybackBackend::setAudioOutputEnabled(bool enabled) {
 
     if (!enabled) {
         setAudioMonitoring(false);
-        if (m_sourceActive) {
-            obs_source_dec_active(m_source);
-            m_sourceActive = false;
-        }
+        // Audio routing must not alter the decode/render lifetime. Toggling
+        // the active reference here makes restart_on_activate restart the
+        // media clock during PVW/PGM role swaps.
         LOG_INFO("OBS media: Audio output disabled for this playback instance.");
         return;
     }
 
-    if (m_supportsAudio && !m_sourceActive) {
-        obs_source_inc_active(m_source);
-        m_sourceActive = true;
-        LOG_INFO("OBS media: Source activated for Program audio output.");
-    }
     if (m_supportsAudio && state() == ObsPlaybackState::Playing && !setAudioMonitoring(true)) {
         LOG_ERROR("OBS media: Failed to enable audio output for the playing instance.");
     } else {
@@ -422,6 +412,17 @@ void ObsPlaybackBackend::logDiagnostics() const {
 void ObsPlaybackBackend::onMediaStarted(void* data, calldata_t*) {
     auto* backend = static_cast<ObsPlaybackBackend*>(data);
     backend->m_mediaEnded.store(false);
+    // A seek queued while ffmpeg_source was Opening can be ignored. Apply it
+    // at the precise media_started boundary instead of waiting for the 200 ms
+    // UI maintenance timer, which could otherwise rewind a source after it
+    // had already been promoted from PVW to PGM.
+    const int64_t pendingSeek = backend->m_pendingSeekMs.exchange(-1);
+    if (pendingSeek >= 0) {
+        backend->m_pendingSeekAttempts.store(0);
+        obs_source_media_set_time(backend->m_source, pendingSeek);
+        backend->m_mediaEnded.store(false);
+        LOG_INFO("OBS media: Applied pending seek to {} ms at media_started.", pendingSeek);
+    }
     if (backend->m_pauseRequested.load()) {
         // libobs queues media commands behind a mutex, so this is processed
         // after the source has completed its asynchronous media_started path.

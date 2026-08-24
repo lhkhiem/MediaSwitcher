@@ -1,7 +1,6 @@
 #pragma once
 
 #include <QWidget>
-#include <QTimer>
 #include <QPaintEvent>
 #include <QElapsedTimer>
 
@@ -9,7 +8,7 @@ class AudioMeterWidget : public QWidget {
     Q_OBJECT
 
 public:
-    explicit AudioMeterWidget(QWidget* parent = nullptr, bool autoReadAudioEngine = true);
+    explicit AudioMeterWidget(QWidget* parent = nullptr);
     ~AudioMeterWidget() override = default;
 
     void setLevels(float leftPeak, float rightPeak);
@@ -18,9 +17,6 @@ public:
 
 protected:
     void paintEvent(QPaintEvent* event) override;
-
-private slots:
-    void updateMeters();
 
 private:
     float m_leftLevel{0.0f};
@@ -33,5 +29,4 @@ private:
     QElapsedTimer m_elapsed;
     qint64 m_lastUpdateNs{0};
 
-    QTimer* m_timer{nullptr};
 };

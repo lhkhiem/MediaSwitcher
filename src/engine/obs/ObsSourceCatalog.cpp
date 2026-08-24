@@ -55,14 +55,12 @@ uint64_t ObsSourceCatalog::replaceFirstBlank(ObsCatalogSourceType type, std::fil
         return source.systemSource;
     });
     if (firstBlank != m_sources.end()) {
-        // Fill the first visible Blank before appending an input.  Display
-        // slot numbers are recalculated from catalog order by the UI.
-        firstBlank->type = type;
-        firstBlank->path = std::move(path);
-        firstBlank->endpoint = std::move(endpoint);
-        firstBlank->displayName = std::move(displayName);
-        firstBlank->systemSource = false;
-        const uint64_t id = firstBlank->id;
+        // Replace only the visible slot, never the source identity.  PVW/PGM
+        // may still own a live Blank backend with the old ID; reusing that ID
+        // for a file makes the UI and thumbnail capture describe a different
+        // source than the backend is actually rendering.
+        const uint64_t id = m_nextId++;
+        *firstBlank = {id, type, std::move(path), std::move(endpoint), std::move(displayName), false};
         reconcileSystemBlanks();
         return id;
     }

@@ -1,6 +1,7 @@
-# Build directories
-build/
-build-obs/
+# Build directories (root-level generated outputs)
+/build/
+/build-*/
+/cmake-build-*/
 bin/
 out/
 installer/output/

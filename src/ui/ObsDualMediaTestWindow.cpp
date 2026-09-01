@@ -3,6 +3,8 @@
 #include "AudioMeterWidget.h"
 #include "AboutDialog.h"
 
+#include "app/WorkspaceStateStore.h"
+#include "common/config/Config.h"
 #include "common/config/CopyrightSettings.h"
 #include "common/logger/Logger.h"
 #include "engine/diagnostics/MediaDiagnostics.h"
@@ -23,6 +25,7 @@ extern "C" {
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
+#include <QDir>
 #include <QEvent>
 #include <QEventLoop>
 #include <QFileIconProvider>
@@ -33,6 +36,7 @@ extern "C" {
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -40,6 +44,7 @@ extern "C" {
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
@@ -61,6 +66,7 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -156,6 +162,12 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
         "QPushButton:pressed { background: #28343d; }"
         "QPushButton:disabled { color: #b8c0c7; background: #303940; border-color: #4c565d; }"
         "QPushButton[loopActive=\"true\"] { background: #1f6b84; border-color: #53a9c6; }"
+        "QMenuBar { background: #20272e; color: #eef3f6; border-bottom: 1px solid #3c4953; padding: 2px; }"
+        "QMenuBar::item { padding: 5px 12px; background: transparent; }"
+        "QMenuBar::item:selected { background: #35424e; }"
+        "QMenu { background: #20272e; color: #eef3f6; border: 1px solid #52616e; }"
+        "QMenu::item { padding: 7px 30px 7px 22px; }"
+        "QMenu::item:selected { background: #1f6b84; }"
         "QComboBox { background: #27313a; color: #eff3f6; border: 1px solid #52616e; border-radius: 2px; min-height: 27px; padding-left: 7px; }"
         "QSlider::groove:horizontal { height: 4px; background: #0e1216; border: 1px solid #4d5962; }"
         "QSlider::sub-page:horizontal { background: #2389b8; }"
@@ -168,6 +180,11 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     auto* rootLayout = new QVBoxLayout(this);
     rootLayout->setContentsMargins(8, 8, 8, 8);
     rootLayout->setSpacing(8);
+    auto* menuBar = new QMenuBar(this);
+    menuBar->setNativeMenuBar(false);
+    auto* fileMenu = menuBar->addMenu(QStringLiteral("File"));
+    bindLocalizedProperty(fileMenu, "title", "Tệp", "File");
+    rootLayout->setMenuBar(menuBar);
     m_switcherArea = new QWidget(this);
     m_switcherArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto* switcherLayout = new QHBoxLayout(m_switcherArea);
@@ -289,6 +306,23 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     inputTitle->setStyleSheet(QStringLiteral("color: #dce7ee; font-weight: bold; letter-spacing: 0px; border: 0;"));
     inputToolbar->addWidget(inputTitle);
     inputToolbar->addStretch();
+    m_workspaceButton = new QPushButton(QStringLiteral("Workspace"), m_inputToolbarWidget);
+    bindLocalizedProperty(m_workspaceButton, "text", "Workspace", "Workspace");
+    auto* workspaceMenu = new QMenu(m_workspaceButton);
+    QAction* openWorkspaceAction = workspaceMenu->addAction(QStringLiteral("Open Workspace..."));
+    QAction* saveWorkspaceAction = workspaceMenu->addAction(QStringLiteral("Save Workspace"));
+    QAction* saveWorkspaceAsAction = workspaceMenu->addAction(QStringLiteral("Save Workspace As..."));
+    bindLocalizedProperty(openWorkspaceAction, "text", "Mở workspace...", "Open Workspace...");
+    bindLocalizedProperty(saveWorkspaceAction, "text", "Lưu workspace", "Save Workspace");
+    bindLocalizedProperty(saveWorkspaceAsAction, "text", "Lưu workspace thành...", "Save Workspace As...");
+    openWorkspaceAction->setShortcut(QKeySequence::Open);
+    saveWorkspaceAction->setShortcut(QKeySequence::Save);
+    saveWorkspaceAsAction->setShortcut(QKeySequence::SaveAs);
+    m_workspaceButton->setMenu(workspaceMenu);
+    fileMenu->addAction(openWorkspaceAction);
+    fileMenu->addSeparator();
+    fileMenu->addAction(saveWorkspaceAction);
+    fileMenu->addAction(saveWorkspaceAsAction);
     m_addSourceButton = new QPushButton(QStringLiteral("Add Input"), m_inputToolbarWidget);
     bindLocalizedProperty(m_addSourceButton, "text", "Thêm nguồn", "Add Input");
     auto* addMenu = new QMenu(m_addSourceButton);
@@ -386,6 +420,7 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     m_languageSelector->setCurrentIndex(m_language == UiLanguage::Vietnamese ? 0 : 1);
     bindLocalizedProperty(m_languageSelector, "toolTip", "Chọn ngôn ngữ giao diện", "Select interface language");
     connect(m_languageSelector, &QComboBox::currentIndexChanged, this, &ObsDualMediaTestWindow::setLanguage);
+    inputToolbar->addWidget(m_workspaceButton);
     inputToolbar->addWidget(m_addSourceButton);
     inputToolbar->addWidget(m_typeLabel);
     inputToolbar->addWidget(m_sourceTypeFilter);
@@ -463,6 +498,9 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     connect(m_cutButton, &QPushButton::clicked, this, [this] { promotePreviewToProgram("CUT"); });
     connect(m_fadeButton, &QPushButton::clicked, this, [this] { fadePreviewToProgram(); });
     connect(m_fullscreenButton, &QPushButton::clicked, this, &ObsDualMediaTestWindow::toggleProgramOutputFullscreen);
+    connect(openWorkspaceAction, &QAction::triggered, this, &ObsDualMediaTestWindow::openWorkspaceDocument);
+    connect(saveWorkspaceAction, &QAction::triggered, this, [this] { saveWorkspaceDocument(false); });
+    connect(saveWorkspaceAsAction, &QAction::triggered, this, [this] { saveWorkspaceDocument(true); });
     connect(addMediaAction, &QAction::triggered, this, [this] { addCatalogFiles(-1); });
     connect(addImageAction, &QAction::triggered, this, [this] { addCatalogFiles(static_cast<int>(ObsCatalogSourceType::ImageFile)); });
     connect(addRtspAction, &QAction::triggered, this, &ObsDualMediaTestWindow::addRtspSource);
@@ -497,6 +535,8 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     m_program.backend->setRenderMode(m_selectedProgramRenderMode);
     m_playlist = std::make_unique<ObsPlaylist>();
     m_sourceCatalog = std::make_unique<ObsSourceCatalog>();
+    m_workspaceStateStore = std::make_unique<WorkspaceStateStore>(
+        std::filesystem::path(Config::getInstance().getWorkspacePath()) / "data" / "mediaswitcher-workspace.json");
     connect(&ObsThumbnailService::instance(), &ObsThumbnailService::thumbnailReady, this,
             [this](quint64 sourceId, const QImage& image, qint64 positionMs) {
         PlaybackSnapshot snapshot;
@@ -511,7 +551,6 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     const uint64_t previewBlankId = m_sourceCatalog->addSystemBlank("Blank 1");
     const uint64_t programBlankId = m_sourceCatalog->addSystemBlank("Blank 2");
     refreshCatalogUi();
-    refreshPlaylistButtonUi();
     m_preview.statusLabel->setText(localized("PVW trống", "PVW empty"));
     m_program.statusLabel->setText(localized("PGM trống", "PGM empty"));
     if (const auto blank = m_sourceCatalog->find(previewBlankId)) stagePreviewSource(*blank);
@@ -524,6 +563,13 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
             LOG_ERROR("OBS app: Failed to open the initial Program Blank source.");
         }
     }
+    const uint64_t restoredPreviewId = restoreWorkspace();
+    if (const auto restoredPreview = m_sourceCatalog->find(restoredPreviewId)) {
+        stagePreviewSource(*restoredPreview);
+    } else {
+        refreshCatalogUi();
+    }
+    refreshPlaylistButtonUi();
 
     if (!mediaPath.empty()) {
         if (!openPanel(m_preview, mediaPath, false) || !openPanel(m_program, mediaPath, true)) {
@@ -888,6 +934,7 @@ void ObsDualMediaTestWindow::setLanguage(int index) {
 void ObsDualMediaTestWindow::closeEvent(QCloseEvent* event) {
     m_closing = true;
     if (m_timer) m_timer->stop();
+    saveWorkspace();
     closePanels();
     event->accept();
 }
@@ -1337,7 +1384,7 @@ void ObsDualMediaTestWindow::updateMonitorLayout() {
 }
 
 void ObsDualMediaTestWindow::updateInputToolbarPresentation() {
-    if (!m_inputToolbarWidget || !m_addSourceButton || !m_openPlaylistButton ||
+    if (!m_inputToolbarWidget || !m_workspaceButton || !m_addSourceButton || !m_openPlaylistButton ||
         !m_sourceTypeFilter || !m_catalogThumbnailSize || !m_projectFrameRate ||
         !m_programRenderMode || !m_typeLabel || !m_sizeLabel ||
         !m_fpsLabel || !m_programViewLabel) {
@@ -1401,6 +1448,7 @@ void ObsDualMediaTestWindow::updateInputToolbarPresentation() {
             }
         )"));
         m_addSourceButton->setText(localized("＋ Nguồn", "＋ Input"));
+        m_workspaceButton->setText(localized("Tệp", "File"));
         if (m_sourceTypeFilter->count() >= 6) {
             m_sourceTypeFilter->setItemText(0, localized("Tất cả", "All types"));
             m_sourceTypeFilter->setItemText(1, QStringLiteral("Video"));
@@ -1424,6 +1472,7 @@ void ObsDualMediaTestWindow::updateInputToolbarPresentation() {
         m_programRenderMode->setItemText(0, localized("Mặc định", "Default"));
         m_programRenderMode->setItemText(1, localized("Vừa", "Fit"));
         setWidth(m_addSourceButton, 104);
+        setWidth(m_workspaceButton, 72);
         setWidth(m_openPlaylistButton, 96);
         setWidth(m_sourceTypeFilter, 102);
         setWidth(m_catalogThumbnailSize, 96);
@@ -1432,6 +1481,7 @@ void ObsDualMediaTestWindow::updateInputToolbarPresentation() {
     } else {
         m_inputToolbarWidget->setStyleSheet(QString());
         m_addSourceButton->setText(localized("Thêm nguồn", "Add Input"));
+        m_workspaceButton->setText(QStringLiteral("Workspace"));
         if (m_sourceTypeFilter->count() >= 6) {
             m_sourceTypeFilter->setItemText(0, localized("Tất cả", "All types"));
             m_sourceTypeFilter->setItemText(1, QStringLiteral("Video"));
@@ -1455,6 +1505,7 @@ void ObsDualMediaTestWindow::updateInputToolbarPresentation() {
         m_programRenderMode->setItemText(0, localized("Mặc định", "Default"));
         m_programRenderMode->setItemText(1, localized("Vừa màn hình", "Fit"));
         setWidth(m_addSourceButton, 0);
+        setWidth(m_workspaceButton, 0);
         setWidth(m_openPlaylistButton, 108);
         setWidth(m_sourceTypeFilter, 0);
         setWidth(m_catalogThumbnailSize, 0);
@@ -2486,6 +2537,7 @@ void ObsDualMediaTestWindow::addCatalogFiles(int sourceTypeFilter) {
             ObsThumbnailService::instance().request(source->id, source->path, source->type);
         }
     }
+    saveWorkspace();
 }
 
 void ObsDualMediaTestWindow::addRtspSource() {
@@ -2511,6 +2563,7 @@ void ObsDualMediaTestWindow::addRtspSource() {
     LOG_INFO("OBS source catalog: added RTSP source #{} endpoint='{}'.", id, endpoint.toUtf8().constData());
     refreshCatalogUi();
     if (const auto source = m_sourceCatalog->find(id)) stagePreviewSource(*source);
+    saveWorkspace();
 }
 
 void ObsDualMediaTestWindow::removeCatalogSource() {
@@ -2588,6 +2641,7 @@ void ObsDualMediaTestWindow::removeCatalogSource(uint64_t sourceId) {
     LOG_INFO("OBS source catalog: removed source #{}; previewReplacement=#{}.", sourceId, replacementPreviewId);
     refreshCatalogUi();
     refreshPlaylistUi();
+    saveWorkspace();
 }
 
 void ObsDualMediaTestWindow::addSelectedCatalogSourceToPlaylist() {
@@ -2603,6 +2657,7 @@ void ObsDualMediaTestWindow::addSelectedCatalogSourceToPlaylist() {
     }
     m_playlist->addSource(sourceId);
     refreshPlaylistUi();
+    saveWorkspace();
 }
 
 void ObsDualMediaTestWindow::removeSelectedPlaylistStep() {
@@ -3028,6 +3083,7 @@ void ObsDualMediaTestWindow::savePlaylistManager() {
     m_playlistEditing = false;
     if (m_playlistDialog) m_playlistDialog->hide();
     refreshPlaylistUi();
+    saveWorkspace();
     LOG_INFO("OBS playlist: saved {} step(s); playback remains stopped until Play Playlist is pressed.", m_playlist->size());
 }
 
@@ -3037,6 +3093,237 @@ void ObsDualMediaTestWindow::cancelPlaylistManager() {
     if (m_playlistDialog) m_playlistDialog->hide();
     refreshPlaylistUi();
     LOG_INFO("OBS playlist: edit cancelled.");
+}
+
+uint64_t ObsDualMediaTestWindow::restoreWorkspace() {
+    if (!m_workspaceStateStore || !m_sourceCatalog || !m_playlist) return 0;
+
+    WorkspaceState state;
+    std::string error;
+    const WorkspaceLoadStatus status = m_workspaceStateStore->load(state, error);
+    if (status == WorkspaceLoadStatus::NotFound) {
+        LOG_INFO("OBS workspace: no saved workspace found at '{}'.",
+                 m_workspaceStateStore->filePath().string());
+        return 0;
+    }
+    if (status != WorkspaceLoadStatus::Loaded) {
+        LOG_WARN("OBS workspace: ignored unreadable workspace '{}': {}",
+                 m_workspaceStateStore->filePath().string(), error);
+        return 0;
+    }
+
+    const uint64_t restoredPreviewId = appendWorkspaceState(state);
+    LOG_INFO("OBS workspace: automatic session loaded from '{}'.", m_workspaceStateStore->filePath().string());
+    return restoredPreviewId;
+}
+
+uint64_t ObsDualMediaTestWindow::appendWorkspaceState(const WorkspaceState& state) {
+    if (!m_sourceCatalog || !m_playlist) return 0;
+
+    std::unordered_map<uint64_t, uint64_t> restoredIds;
+    restoredIds.reserve(state.sources.size());
+    size_t skippedSources = 0;
+    for (const WorkspaceSourceRecord& savedSource : state.sources) {
+        uint64_t restoredId = 0;
+        if (savedSource.type == ObsCatalogSourceType::RtspCamera) {
+            const QUrl endpoint(QString::fromUtf8(savedSource.endpoint.c_str()));
+            if (endpoint.isValid() && endpoint.scheme().compare(QStringLiteral("rtsp"), Qt::CaseInsensitive) == 0 &&
+                !endpoint.host().isEmpty()) {
+                restoredId = m_sourceCatalog->addRtsp(savedSource.endpoint, savedSource.displayName);
+            }
+        } else if (savedSource.type != ObsCatalogSourceType::ColorBlank && !savedSource.path.empty()) {
+            restoredId = m_sourceCatalog->add(savedSource.path);
+        }
+
+        if (restoredId == 0) {
+            ++skippedSources;
+            continue;
+        }
+        restoredIds.emplace(savedSource.sourceId, restoredId);
+        if (const auto source = m_sourceCatalog->find(restoredId);
+            source && source->type != ObsCatalogSourceType::RtspCamera) {
+            ObsThumbnailService::instance().request(source->id, source->path, source->type);
+        }
+    }
+
+    m_playlist->clear();
+    m_playlist->setLoop(state.playlistLoop);
+    m_playlist->setAutoNext(state.playlistAutoNext);
+    for (const uint64_t savedSourceId : state.playlistSourceIds) {
+        const auto restored = restoredIds.find(savedSourceId);
+        if (restored == restoredIds.end()) continue;
+        const auto source = m_sourceCatalog->find(restored->second);
+        if (source && obsCatalogSourceHasTimeline(source->type)) m_playlist->addSource(source->id);
+    }
+
+    uint64_t restoredPreviewId = 0;
+    if (const auto restored = restoredIds.find(state.previewSourceId); restored != restoredIds.end()) {
+        restoredPreviewId = restored->second;
+    }
+    LOG_INFO("OBS workspace: restored {} source(s), {} playlist step(s); skipped {} invalid source(s).",
+             restoredIds.size(), m_playlist->size(), skippedSources);
+    return restoredPreviewId;
+}
+
+WorkspaceState ObsDualMediaTestWindow::captureWorkspaceState() const {
+    WorkspaceState state;
+    if (!m_sourceCatalog || !m_playlist) return state;
+    state.sources.reserve(m_sourceCatalog->sources().size());
+    for (const ObsCatalogSource& source : m_sourceCatalog->sources()) {
+        if (source.systemSource || source.type == ObsCatalogSourceType::ColorBlank) continue;
+        state.sources.push_back({source.id, source.type, source.path, source.endpoint, source.displayName});
+    }
+    state.playlistSourceIds.reserve(m_playlist->size());
+    for (size_t index = 0; index < m_playlist->size(); ++index) {
+        state.playlistSourceIds.push_back(m_playlist->sourceIdAt(index));
+    }
+    state.previewSourceId = m_previewSourceId;
+    state.programSourceId = m_programSourceId;
+    state.playlistLoop = m_playlist->isLooping();
+    state.playlistAutoNext = m_playlist->isAutoNext();
+    return state;
+}
+
+bool ObsDualMediaTestWindow::replaceWorkspace(const WorkspaceState& state) {
+    if (m_fadeActive) {
+        QMessageBox::warning(this, localized("Đang chuyển cảnh", "Transition active"),
+                             localized("Không thể mở workspace khi FADE đang chạy.",
+                                       "A workspace cannot be opened while FADE is active."));
+        return false;
+    }
+
+    if (m_playlistMode) stopPlaylist();
+    cancelPlaylistManager();
+    ObsThumbnailService::instance().cancelPendingAndWait();
+    closePanels();
+
+    m_sourcePosters.clear();
+    m_sourceThumbnails.clear();
+    m_sourceTimelineFrames.clear();
+    m_catalogThumbnailLabels.clear();
+    m_sourceThumbnailSnapshots.clear();
+    m_sourceTimelineFrameSnapshots.clear();
+    m_sourcesWithTimelineThumbnail.clear();
+    m_lastProgramSnapshots.clear();
+    m_stagedPreviewFrame = {};
+    m_stagedPreviewSnapshot = {};
+    m_stagedPreviewFrameSourceId = 0;
+    m_previewSourceId = 0;
+    m_programSourceId = 0;
+
+    m_playlist = std::make_unique<ObsPlaylist>();
+    m_sourceCatalog = std::make_unique<ObsSourceCatalog>();
+    const uint64_t previewBlankId = m_sourceCatalog->addSystemBlank("Blank 1");
+    const uint64_t programBlankId = m_sourceCatalog->addSystemBlank("Blank 2");
+    if (const auto blank = m_sourceCatalog->find(previewBlankId)) stagePreviewSource(*blank);
+    if (const auto blank = m_sourceCatalog->find(programBlankId)) {
+        m_program.backend->setAudioOutputEnabled(true);
+        if (!m_program.backend->open(*blank)) {
+            LOG_ERROR("OBS workspace: failed to open the safe Program Blank while replacing workspace.");
+            return false;
+        }
+        setProgramSourceId(programBlankId, false);
+        initializeDisplay(m_program);
+    }
+
+    const uint64_t restoredPreviewId = appendWorkspaceState(state);
+    if (const auto restoredPreview = m_sourceCatalog->find(restoredPreviewId)) stagePreviewSource(*restoredPreview);
+    refreshCatalogUi();
+    refreshPlaylistButtonUi();
+    refreshPlaylistUi();
+    QTimer::singleShot(0, this, [this] {
+        initializeDisplay(m_preview);
+        initializeDisplay(m_program);
+        updateMonitorLayout();
+    });
+    return true;
+}
+
+bool ObsDualMediaTestWindow::saveWorkspace() {
+    if (!m_workspaceStateStore) return false;
+    const WorkspaceState state = captureWorkspaceState();
+
+    std::string error;
+    if (!m_workspaceStateStore->save(state, error)) {
+        LOG_ERROR("OBS workspace: failed to save '{}': {}", m_workspaceStateStore->filePath().string(), error);
+        return false;
+    }
+    LOG_INFO("OBS workspace: atomically saved {} source(s) and {} playlist step(s) to '{}'.",
+             state.sources.size(), state.playlistSourceIds.size(), m_workspaceStateStore->filePath().string());
+    return true;
+}
+
+bool ObsDualMediaTestWindow::saveWorkspaceTo(const std::filesystem::path& filePath) {
+    WorkspaceStateStore store(filePath);
+    const WorkspaceState state = captureWorkspaceState();
+    std::string error;
+    if (!store.save(state, error)) {
+        LOG_ERROR("OBS workspace document: failed to save '{}': {}", filePath.string(), error);
+        QMessageBox::critical(this, localized("Không thể lưu workspace", "Cannot save workspace"),
+                              localized("Không thể ghi file workspace:\n%1", "Cannot write workspace file:\n%1")
+                                  .arg(QString::fromUtf8(error.c_str())));
+        return false;
+    }
+    LOG_INFO("OBS workspace document: saved {} source(s) and {} playlist step(s) to '{}'.",
+             state.sources.size(), state.playlistSourceIds.size(), filePath.string());
+    return true;
+}
+
+void ObsDualMediaTestWindow::saveWorkspaceDocument(bool saveAs) {
+    QString selectedPath;
+    if (!saveAs && !m_currentWorkspaceFile.empty()) {
+        selectedPath = QString::fromStdWString(m_currentWorkspaceFile.wstring());
+    } else {
+        QSettings settings;
+        const QString initialDirectory = settings.value(
+            QStringLiteral("workspace/lastDirectory"), QDir::homePath()).toString();
+        selectedPath = QFileDialog::getSaveFileName(
+            this, localized("Lưu workspace", "Save Workspace"),
+            QDir(initialDirectory).filePath(QStringLiteral("program1.ms")),
+            localized("Workspace MediaSwitcher (*.ms)", "MediaSwitcher Workspace (*.ms)"));
+        if (selectedPath.isEmpty()) return;
+        if (QFileInfo(selectedPath).suffix().compare(QStringLiteral("ms"), Qt::CaseInsensitive) != 0) {
+            selectedPath += QStringLiteral(".ms");
+        }
+        settings.setValue(QStringLiteral("workspace/lastDirectory"), QFileInfo(selectedPath).absolutePath());
+    }
+
+    const std::filesystem::path filePath(selectedPath.toStdWString());
+    if (!saveWorkspaceTo(filePath)) return;
+    m_currentWorkspaceFile = filePath;
+    setWindowTitle(QStringLiteral("MediaSwitcher OBS — %1").arg(QFileInfo(selectedPath).fileName()));
+    QMessageBox::information(this, localized("Đã lưu workspace", "Workspace saved"),
+                             localized("Đã lưu workspace vào:\n%1", "Workspace saved to:\n%1").arg(selectedPath));
+}
+
+void ObsDualMediaTestWindow::openWorkspaceDocument() {
+    QSettings settings;
+    const QString initialDirectory = settings.value(
+        QStringLiteral("workspace/lastDirectory"), QDir::homePath()).toString();
+    const QString selectedPath = QFileDialog::getOpenFileName(
+        this, localized("Mở workspace", "Open Workspace"), initialDirectory,
+        localized("Workspace MediaSwitcher (*.ms)", "MediaSwitcher Workspace (*.ms)"));
+    if (selectedPath.isEmpty()) return;
+
+    WorkspaceState state;
+    std::string error;
+    const std::filesystem::path filePath(selectedPath.toStdWString());
+    const WorkspaceLoadStatus status = WorkspaceStateStore(filePath).load(state, error);
+    if (status != WorkspaceLoadStatus::Loaded) {
+        QMessageBox::critical(this, localized("Workspace không hợp lệ", "Invalid workspace"),
+                              localized("Không thể mở file workspace:\n%1", "Cannot open workspace file:\n%1")
+                                  .arg(QString::fromUtf8(error.c_str())));
+        LOG_WARN("OBS workspace document: rejected '{}': {}", filePath.string(), error);
+        return;
+    }
+
+    saveWorkspace();
+    if (!replaceWorkspace(state)) return;
+    m_currentWorkspaceFile = filePath;
+    settings.setValue(QStringLiteral("workspace/lastDirectory"), QFileInfo(selectedPath).absolutePath());
+    setWindowTitle(QStringLiteral("MediaSwitcher OBS — %1").arg(QFileInfo(selectedPath).fileName()));
+    saveWorkspace();
+    LOG_INFO("OBS workspace document: opened '{}'.", filePath.string());
 }
 
 void ObsDualMediaTestWindow::toggleFullscreen() {

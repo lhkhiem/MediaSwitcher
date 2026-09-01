@@ -17,6 +17,8 @@ set(SOURCES
     common/config/CopyrightSettings.h
     app/WorkspaceManager.cpp
     app/WorkspaceManager.h
+    app/WorkspaceStateStore.cpp
+    app/WorkspaceStateStore.h
     engine/diagnostics/MediaDiagnostics.cpp
     engine/diagnostics/MediaDiagnostics.h
     engine/obs/ObsContext.cpp

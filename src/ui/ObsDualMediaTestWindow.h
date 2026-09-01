@@ -28,6 +28,8 @@ class ObsPlaylist;
 class ObsSourceCatalog;
 class ObsProgramOutputWindow;
 class AudioMeterWidget;
+class WorkspaceStateStore;
+struct WorkspaceState;
 struct ObsCatalogSource;
 class QCloseEvent;
 class QResizeEvent;
@@ -180,12 +182,21 @@ private:
     void cancelPlaylistManager();
     void toggleFullscreen();
     void toggleProgramOutputFullscreen();
+    uint64_t restoreWorkspace();
+    uint64_t appendWorkspaceState(const WorkspaceState& state);
+    WorkspaceState captureWorkspaceState() const;
+    bool replaceWorkspace(const WorkspaceState& state);
+    bool saveWorkspace();
+    bool saveWorkspaceTo(const std::filesystem::path& filePath);
+    void saveWorkspaceDocument(bool saveAs);
+    void openWorkspaceDocument();
     void closePanels();
 
     Panel m_preview;
     Panel m_program;
     std::unique_ptr<ObsPlaylist> m_playlist;
     std::unique_ptr<ObsSourceCatalog> m_sourceCatalog;
+    std::unique_ptr<WorkspaceStateStore> m_workspaceStateStore;
     std::unique_ptr<ObsProgramOutputWindow> m_programOutput;
     ObsContext& m_context;
     QTimer* m_timer{nullptr};
@@ -199,6 +210,7 @@ private:
     QPushButton* m_fadeButton{nullptr};
     QPushButton* m_fullscreenButton{nullptr};
     QPushButton* m_addSourceButton{nullptr};
+    QPushButton* m_workspaceButton{nullptr};
     QPushButton* m_openPlaylistButton{nullptr};
     QComboBox* m_catalogThumbnailSize{nullptr};
     QComboBox* m_sourceTypeFilter{nullptr};
@@ -251,6 +263,7 @@ private:
     UiLanguage m_language{UiLanguage::Vietnamese};
     ObsRenderMode m_selectedProgramRenderMode;
     std::vector<uint64_t> m_playlistDraft;
+    std::filesystem::path m_currentWorkspaceFile;
     PlaybackSnapshot m_fadeOutgoingSnapshot;
     PlaybackSnapshot m_stagedPreviewSnapshot;
 };

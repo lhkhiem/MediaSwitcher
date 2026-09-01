@@ -38,4 +38,20 @@ build-obs\obs-runtime-stage\bin\64bit\MediaSwitcher.exe
 .\Run-MediaSwitcher-OBS.cmd
 ```
 
-Script installer legacy đã được loại bỏ vì không đóng gói đúng cây runtime OBS. Chỉ tạo installer mới khi quy trình đóng gói giữ nguyên cấu trúc `bin/64bit`, `data` và `obs-plugins` của libobs.
+## 5. Tạo bộ cài Inno Setup
+
+Bộ cài mới giữ nguyên cấu trúc `bin/64bit`, `data` và `obs-plugins` của libobs. Chạy:
+
+```powershell
+.\installer\Build-Installer.ps1
+```
+
+Script sẽ build Release, kiểm tra đầy đủ dependency OBS/Qt, tìm Inno Setup 6 và Microsoft Visual C++ Redistributable, sau đó tạo file tại:
+
+```text
+installer\output\MediaSwitcher-Setup-v1.0.0-x64.exe
+```
+
+Dùng `-SkipBuild` chỉ khi `build-obs\obs-runtime-stage` vừa được build và đã kiểm tra. Bộ cài chỉ lấy dependency trong manifest; log, workspace, executable smoke test và DLL legacy còn sót trong thư mục build sẽ không được đóng gói.
+
+Ứng dụng được cài theo người dùng vào `%LOCALAPPDATA%\Programs\MediaSwitcher`, vì vậy log và workspace vẫn có quyền ghi mà không cần chạy bằng quyền Administrator. Shortcut dùng thư mục `bin\64bit` làm working directory để libobs nạp đúng shader và module data.

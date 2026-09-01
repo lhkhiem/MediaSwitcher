@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 
 project(MediaSwitcher VERSION 1.0.0 LANGUAGES CXX)
 
+include(CTest)
+
 set(OBS_RUNTIME_ROOT "" CACHE PATH "Controlled libobs runtime root")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -36,4 +38,7 @@ FetchContent_MakeAvailable(spdlog)
 
 # Add subdirectories
 add_subdirectory(src)
+if (BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
 

@@ -3,10 +3,12 @@
 #include <QWidget>
 #include <QPixmap>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -36,12 +38,15 @@ class QResizeEvent;
 class QShowEvent;
 class QKeyEvent;
 class QEvent;
+class QScreen;
 struct obs_display;
 struct obs_source;
+struct gs_texture;
 struct gs_texture_render;
 struct gs_stage_surface;
 typedef struct obs_display obs_display_t;
 typedef struct obs_source obs_source_t;
+typedef struct gs_texture gs_texture_t;
 typedef struct gs_texture_render gs_texrender_t;
 typedef struct gs_stage_surface gs_stagesurf_t;
 
@@ -62,6 +67,40 @@ protected:
 
 private:
     enum class UiLanguage { Vietnamese, English };
+    enum class LayoutMode { Single = 0, Triple = 1 };
+
+    struct TripleZone {
+        int index{0};
+        int x{0};
+        int y{0};
+        int width{640};
+        int height{1080};
+        ObsRenderMode renderMode;
+        uint64_t sourceId{0};
+        uint64_t pendingSourceId{0};
+        int64_t pendingPositionMs{0};
+        bool pendingLooping{false};
+        bool looping{false};
+        float volume{1.0f};
+        bool audioMuted{false};
+        bool blackout{false};
+        bool sliderDragging{false};
+        std::unique_ptr<ObsPlaybackBackend> activeBackend;
+        std::unique_ptr<ObsPlaybackBackend> pendingBackend;
+        QWidget* cardWidget{nullptr};
+        QPushButton* targetButton{nullptr};
+        QLabel* infoLabel{nullptr};
+        QLabel* statusBadge{nullptr};
+        QLabel* timeLabel{nullptr};
+        QSlider* seekSlider{nullptr};
+        QPushButton* playPauseButton{nullptr};
+        QPushButton* loopButton{nullptr};
+        QPushButton* resetButton{nullptr};
+        QComboBox* fitCombo{nullptr};
+        QPushButton* muteButton{nullptr};
+        QPushButton* blackoutButton{nullptr};
+        QPushButton* takeButton{nullptr};
+    };
 
     struct Panel {
         ObsDualMediaTestWindow* owner{nullptr};
@@ -190,7 +229,28 @@ private:
     bool saveWorkspaceTo(const std::filesystem::path& filePath);
     void saveWorkspaceDocument(bool saveAs);
     void openWorkspaceDocument();
+    void applyWorkspaceSettings(const WorkspaceState& state, bool applyFrameRate);
+    void selectOutputScreen();
+    QScreen* selectedOutputScreen() const;
+    void retryCatalogSource(uint64_t sourceId);
     void closePanels();
+    QWidget* createTripleDeck(QWidget* parent);
+    void renderProgramCanvas(uint32_t width, uint32_t height, bool mapCanvasToSurface);
+    void setLayoutMode(LayoutMode mode);
+    void selectActiveZone(int zoneIndex);
+    bool promotePreviewToZone(int zoneIndex, const char* operation);
+    void commitPendingZoneSwaps();
+    void updateTripleZonesUi();
+    void showTripleLayoutSettingsDialog();
+    void toggleTestPattern();
+    void rebuildTestPatternImage();
+    void toggleZonePlayback(int zoneIndex);
+    void toggleZoneLoop(int zoneIndex);
+    void resetZone(int zoneIndex);
+    void setZoneFitMode(int zoneIndex, int comboIndex);
+    void toggleZoneAudioMaster(int zoneIndex);
+    void toggleZoneBlackout(int zoneIndex);
+    void toggleBlackoutAll(bool checked);
 
     Panel m_preview;
     Panel m_program;
@@ -264,6 +324,25 @@ private:
     ObsRenderMode m_selectedProgramRenderMode;
     std::vector<uint64_t> m_playlistDraft;
     std::filesystem::path m_currentWorkspaceFile;
+    std::string m_outputScreenName;
     PlaybackSnapshot m_fadeOutgoingSnapshot;
     PlaybackSnapshot m_stagedPreviewSnapshot;
+    mutable std::mutex m_tripleRenderMutex;
+    LayoutMode m_layoutMode{LayoutMode::Single};
+    int m_canvasWidth{3200};
+    int m_canvasHeight{1080};
+    int m_activeZoneIndex{1};
+    std::atomic_bool m_blackoutAll{false};
+    std::atomic_bool m_testPatternActive{false};
+    std::atomic_bool m_testPatternDirty{true};
+    gs_texture_t* m_testPatternTexture{nullptr};
+    QImage m_testPatternImage;
+    std::array<TripleZone, 3> m_tripleZones;
+    QWidget* m_tripleDeckWidget{nullptr};
+    QComboBox* m_layoutModeSelector{nullptr};
+    QPushButton* m_tripleConfigButton{nullptr};
+    QPushButton* m_testPatternButton{nullptr};
+    QPushButton* m_blackoutAllButton{nullptr};
+    std::array<QPushButton*, 3> m_railZoneButtons{{nullptr, nullptr, nullptr}};
+    QWidget* m_zoneSelectorContainer{nullptr};
 };

@@ -39,8 +39,8 @@ QImage readImageThumbnail(const std::filesystem::path& path) {
 }
 
 QImage renderVideoThumbnailFrame(obs_source_t* source, int maximumWidth, int maximumHeight) {
-    const uint32_t sourceWidth = obs_source_get_base_width(source);
-    const uint32_t sourceHeight = obs_source_get_base_height(source);
+    const uint32_t sourceWidth = std::max(obs_source_get_width(source), obs_source_get_base_width(source));
+    const uint32_t sourceHeight = std::max(obs_source_get_height(source), obs_source_get_base_height(source));
     if (sourceWidth == 0 || sourceHeight == 0) return {};
 
     const double scale = std::min(
@@ -161,7 +161,9 @@ DecodedThumbnail decodeVideoThumbnail(
             }
         }
 
-        if (obs_source_get_base_width(source) > 0 && obs_source_get_base_height(source) > 0) {
+        const uint32_t sw = std::max(obs_source_get_width(source), obs_source_get_base_width(source));
+        const uint32_t sh = std::max(obs_source_get_height(source), obs_source_get_base_height(source));
+        if (sw > 0 && sh > 0) {
             const int64_t candidatePositionMs = std::max<int64_t>(0, obs_source_media_get_time(source));
             QImage candidate = renderVideoThumbnailFrame(source, 320, 180);
             const double score = visibleFrameScore(candidate);

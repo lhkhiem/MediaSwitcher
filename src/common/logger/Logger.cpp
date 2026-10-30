@@ -37,7 +37,7 @@ void Logger::init() {
 
         LOG_INFO("Logger initialized successfully.");
     }
-    catch (const spdlog::spdlog_ex& ex) {
+    catch (const std::exception& ex) {
         std::cerr << "Logger initialization failed: " << ex.what() << std::endl;
     }
 }

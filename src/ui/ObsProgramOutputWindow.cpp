@@ -19,7 +19,18 @@ ObsProgramOutputWindow::ObsProgramOutputWindow(std::function<ObsPlaybackBackend*
     setWindowTitle(QStringLiteral("MediaSwitcher Program Output"));
 }
 
+ObsProgramOutputWindow::ObsProgramOutputWindow(std::function<void(uint32_t, uint32_t)> customRenderer, QWidget* parent, bool)
+    : QWidget(parent), m_customRenderer(std::move(customRenderer)) {
+    setAttribute(Qt::WA_NativeWindow);
+    setStyleSheet(QStringLiteral("background: black;"));
+    setWindowTitle(QStringLiteral("MediaSwitcher Program Output"));
+}
+
 ObsProgramOutputWindow::~ObsProgramOutputWindow() { destroyDisplay(); }
+
+void ObsProgramOutputWindow::setCustomRenderer(std::function<void(uint32_t, uint32_t)> customRenderer) {
+    m_customRenderer = std::move(customRenderer);
+}
 
 void ObsProgramOutputWindow::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
@@ -40,7 +51,12 @@ void ObsProgramOutputWindow::resizeEvent(QResizeEvent* event) {
 
 void ObsProgramOutputWindow::draw(void* parameter, uint32_t width, uint32_t height) {
     auto* output = static_cast<ObsProgramOutputWindow*>(parameter);
-    if (!output || !output->m_backendProvider) return;
+    if (!output) return;
+    if (output->m_customRenderer) {
+        output->m_customRenderer(width, height);
+        return;
+    }
+    if (!output->m_backendProvider) return;
     if (ObsPlaybackBackend* backend = output->m_backendProvider(); backend && backend->isOpen()) {
         backend->render(width, height);
     }

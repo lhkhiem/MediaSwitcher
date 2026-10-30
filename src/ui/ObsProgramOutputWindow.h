@@ -16,7 +16,9 @@ class ObsProgramOutputWindow final : public QWidget {
     Q_OBJECT
 public:
     explicit ObsProgramOutputWindow(std::function<ObsPlaybackBackend*()> backendProvider, QWidget* parent = nullptr);
+    explicit ObsProgramOutputWindow(std::function<void(uint32_t, uint32_t)> customRenderer, QWidget* parent = nullptr, bool isCustom = true);
     ~ObsProgramOutputWindow() override;
+    void setCustomRenderer(std::function<void(uint32_t, uint32_t)> customRenderer);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -29,5 +31,6 @@ private:
     void destroyDisplay();
 
     std::function<ObsPlaybackBackend*()> m_backendProvider;
+    std::function<void(uint32_t, uint32_t)> m_customRenderer;
     obs_display_t* m_display{nullptr};
 };

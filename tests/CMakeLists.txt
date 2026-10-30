@@ -4,6 +4,8 @@ add_executable(WorkspaceStateStoreTest
     WorkspaceStateStoreTest.cpp
     ../src/app/WorkspaceStateStore.cpp
     ../src/app/WorkspaceStateStore.h
+    ../src/engine/obs/ObsSourceCatalog.cpp
+    ../src/engine/obs/ObsSourceCatalog.h
 )
 
 target_include_directories(WorkspaceStateStoreTest PRIVATE ${CMAKE_SOURCE_DIR}/src)

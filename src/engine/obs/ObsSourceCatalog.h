@@ -32,6 +32,7 @@ public:
     uint64_t add(const std::filesystem::path& path);
     uint64_t addRtsp(std::string endpoint, std::string displayName);
     uint64_t addSystemBlank(std::string displayName);
+    bool relinkLocalFile(uint64_t id, const std::filesystem::path& path);
     bool remove(uint64_t id);
     std::optional<ObsCatalogSource> find(uint64_t id) const;
     const std::vector<ObsCatalogSource>& sources() const { return m_sources; }

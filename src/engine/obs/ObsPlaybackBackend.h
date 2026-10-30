@@ -21,6 +21,7 @@ enum class ObsPlaybackState {
 enum class ObsRenderMode {
     AspectFit,
     FitToScreen,
+    AspectFill,
 };
 
 class ObsPlaybackBackend final {
@@ -62,6 +63,7 @@ public:
     void setRenderMode(ObsRenderMode mode) { m_renderMode.store(mode); }
     ObsRenderMode renderMode() const { return m_renderMode.load(); }
     void render(uint32_t width, uint32_t height) const;
+    void renderRect(int x, int y, uint32_t width, uint32_t height) const;
     void logDiagnostics() const;
 
 private:

@@ -96,5 +96,5 @@ add_custom_command(TARGET MediaSwitcher POST_BUILD
 )
 
 if(MSVC)
-    target_compile_options(MediaSwitcher PRIVATE /W4)
+    target_compile_options(MediaSwitcher PRIVATE /W4 /utf-8)
 endif()

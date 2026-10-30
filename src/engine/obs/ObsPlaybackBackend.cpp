@@ -373,36 +373,66 @@ void ObsPlaybackBackend::resetRenderSource() {
 }
 
 void ObsPlaybackBackend::render(uint32_t width, uint32_t height) const {
+    renderRect(0, 0, width, height);
+}
+
+void ObsPlaybackBackend::renderRect(int x, int y, uint32_t width, uint32_t height) const {
     if (!m_view || width == 0 || height == 0) return;
-    const uint32_t sourceWidth = m_source ? obs_source_get_base_width(m_source) : 0;
-    const uint32_t sourceHeight = m_source ? obs_source_get_base_height(m_source) : 0;
+    uint32_t sourceWidth = m_source ? obs_source_get_width(m_source) : 0;
+    uint32_t sourceHeight = m_source ? obs_source_get_height(m_source) : 0;
+    if (sourceWidth == 0 && m_source) {
+        sourceWidth = obs_source_get_base_width(m_source);
+    }
+    if (sourceHeight == 0 && m_source) {
+        sourceHeight = obs_source_get_base_height(m_source);
+    }
     if (sourceWidth == 0 || sourceHeight == 0) return;
+
     float scaleX = 1.0f;
     float scaleY = 1.0f;
     float offsetX = 0.0f;
     float offsetY = 0.0f;
     switch (m_renderMode.load()) {
     case ObsRenderMode::FitToScreen:
-        scaleX = static_cast<float>(width) / sourceWidth;
-        scaleY = static_cast<float>(height) / sourceHeight;
+        scaleX = static_cast<float>(width) / static_cast<float>(sourceWidth);
+        scaleY = static_cast<float>(height) / static_cast<float>(sourceHeight);
         break;
-    case ObsRenderMode::AspectFit:
-    default: {
-        const float scale = std::min(static_cast<float>(width) / sourceWidth, static_cast<float>(height) / sourceHeight);
+    case ObsRenderMode::AspectFill: {
+        const float scale = std::max(static_cast<float>(width) / static_cast<float>(sourceWidth),
+                                     static_cast<float>(height) / static_cast<float>(sourceHeight));
         scaleX = scale;
         scaleY = scale;
-        offsetX = (static_cast<float>(width) - sourceWidth * scale) / 2.0f;
-        offsetY = (static_cast<float>(height) - sourceHeight * scale) / 2.0f;
+        offsetX = (static_cast<float>(width) - static_cast<float>(sourceWidth) * scale) * 0.5f;
+        offsetY = (static_cast<float>(height) - static_cast<float>(sourceHeight) * scale) * 0.5f;
+        break;
+    }
+    case ObsRenderMode::AspectFit:
+    default: {
+        const float scale = std::min(static_cast<float>(width) / static_cast<float>(sourceWidth),
+                                     static_cast<float>(height) / static_cast<float>(sourceHeight));
+        scaleX = scale;
+        scaleY = scale;
+        offsetX = (static_cast<float>(width) - static_cast<float>(sourceWidth) * scale) * 0.5f;
+        offsetY = (static_cast<float>(height) - static_cast<float>(sourceHeight) * scale) * 0.5f;
         break;
     }
     }
-    gs_viewport_push(); gs_projection_push(); gs_matrix_push();
-    gs_set_viewport(0, 0, static_cast<int>(width), static_cast<int>(height));
+
+    gs_viewport_push();
+    gs_projection_push();
+    gs_matrix_push();
+
+    gs_set_viewport(x, y, static_cast<int>(width), static_cast<int>(height));
     gs_ortho(0.0f, static_cast<float>(width), 0.0f, static_cast<float>(height), -100.0f, 100.0f);
+    gs_matrix_identity();
     gs_matrix_translate3f(offsetX, offsetY, 0.0f);
     gs_matrix_scale3f(scaleX, scaleY, 1.0f);
+
     obs_view_render(m_view);
-    gs_matrix_pop(); gs_projection_pop(); gs_viewport_pop();
+
+    gs_matrix_pop();
+    gs_projection_pop();
+    gs_viewport_pop();
 }
 
 void ObsPlaybackBackend::logDiagnostics() const {

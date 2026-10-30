@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [string]$VCRedistPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -67,13 +68,43 @@ try {
         throw 'Inno Setup 6 (ISCC.exe) was not found.'
     }
 
-    $vcRedistRoot = 'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Redist\MSVC'
-    $vcRedist = Get-ChildItem -LiteralPath $vcRedistRoot -Filter 'vc_redist.x64.exe' -File -Recurse |
-        Sort-Object FullName -Descending |
-        Select-Object -First 1
-    if (-not $vcRedist) {
-        throw 'vc_redist.x64.exe was not found.'
+    # The Qt installer may carry a newer redistributable than Visual Studio.
+    # Sort by binary version, never by directory name (e.g. "v143").
+    $scriptText = [IO.File]::ReadAllText($innoScript, [Text.Encoding]::UTF8)
+    $minimumMatch = [regex]::Match($scriptText, '#define MinimumVCRedistVersion "([0-9.]+)"')
+    if (-not $minimumMatch.Success) { throw 'Missing MinimumVCRedistVersion in installer script.' }
+    $minimumVersion = [version]$minimumMatch.Groups[1].Value
+    $candidatePaths = @()
+    if ($VCRedistPath) {
+        $candidatePaths += (Get-Item -LiteralPath $VCRedistPath).FullName
+    } else {
+        $cache = [IO.File]::ReadAllText((Join-Path $repositoryRoot 'build-obs\CMakeCache.txt'))
+        $qtMatch = [regex]::Match($cache, '(?m)^Qt6_DIR:[^=]+=(.+)$')
+        if ($qtMatch.Success) {
+            $qtRoot = [IO.Path]::GetFullPath((Join-Path $qtMatch.Groups[1].Value.Trim() '..\..\..\..\..'))
+            $candidatePaths += Get-ChildItem -LiteralPath (Join-Path $qtRoot 'vcredist') `
+                -Filter '*redist*x64.exe' -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+        }
+        $vsRoots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ } |
+            ForEach-Object { Join-Path $_ 'Microsoft Visual Studio' } | Select-Object -Unique
+        foreach ($root in $vsRoots) {
+            $candidatePaths += Get-ChildItem -LiteralPath $root -Filter 'vc_redist.x64.exe' `
+                -File -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+        }
     }
+    $vcRedist = $candidatePaths | Select-Object -Unique | ForEach-Object {
+        $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($_)
+        [PSCustomObject]@{
+            FullName = $_
+            Version = [version]::new($info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart)
+        }
+    } | Where-Object { $_.Version -ge $minimumVersion } |
+        Sort-Object Version -Descending | Select-Object -First 1
+    if (-not $vcRedist) {
+        throw "Visual C++ x64 Redistributable >= $minimumVersion is required. Use -VCRedistPath with the Microsoft package; an older package must not be shipped."
+    }
+    Write-Output "VC_REDIST_PATH=$($vcRedist.FullName)"
+    Write-Output "VC_REDIST_VERSION=$($vcRedist.Version)"
 
     New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
     $arguments = @(

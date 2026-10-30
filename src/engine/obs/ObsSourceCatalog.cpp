@@ -77,6 +77,20 @@ uint64_t ObsSourceCatalog::addSystemBlank(std::string displayName) {
     return id;
 }
 
+bool ObsSourceCatalog::relinkLocalFile(uint64_t id, const std::filesystem::path& path) {
+    if (!std::filesystem::is_regular_file(path)) return false;
+    const auto source = std::find_if(m_sources.begin(), m_sources.end(), [id](const ObsCatalogSource& candidate) {
+        return candidate.id == id;
+    });
+    if (source == m_sources.end() || source->systemSource ||
+        source->type == ObsCatalogSourceType::RtspCamera || source->type == ObsCatalogSourceType::ColorBlank) {
+        return false;
+    }
+    source->path = path;
+    source->type = classifyObsLocalFile(path);
+    return true;
+}
+
 bool ObsSourceCatalog::remove(uint64_t id) {
     const auto it = std::find_if(m_sources.begin(), m_sources.end(), [id](const ObsCatalogSource& source) {
         return source.id == id;

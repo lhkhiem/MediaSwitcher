@@ -9,8 +9,11 @@
 #include "ui/ObsMediaTestWindow.h"
 
 #include <QApplication>
+#include <QDir>
 #include <QEventLoop>
 #include <QIcon>
+#include <QMessageBox>
+#include <QSysInfo>
 #include <QTimer>
 #include <algorithm>
 #include <chrono>
@@ -18,7 +21,40 @@
 #include <filesystem>
 #include <unordered_set>
 
+extern "C" {
+#include <util/base.h>
+}
+
 namespace {
+void logQtMessage(QtMsgType type, const QMessageLogContext&, const QString& message) {
+    const auto logger = Logger::getLogger();
+    if (!logger) return;
+    const auto level = type == QtFatalMsg || type == QtCriticalMsg ? spdlog::level::err :
+        type == QtWarningMsg ? spdlog::level::warn :
+        type == QtDebugMsg ? spdlog::level::debug : spdlog::level::info;
+    logger->log(level, "Qt: {}", message.toUtf8().constData());
+}
+
+void logObsMessage(int level, const char* format, va_list arguments, void*) {
+    const auto logger = Logger::getLogger();
+    if (!logger) return;
+    const auto severity = level <= LOG_ERROR ? spdlog::level::err :
+        level <= LOG_WARNING ? spdlog::level::warn :
+        level <= LOG_INFO ? spdlog::level::info : spdlog::level::debug;
+    if (!logger->should_log(severity)) return;
+    const auto message = QString::vasprintf(format, arguments).trimmed().toUtf8();
+    logger->log(severity, "libobs: {}", message.constData());
+}
+
+int startupFailure(const QString& reason) {
+    if (!QCoreApplication::arguments().contains(QStringLiteral("--startup-smoke-test"))) {
+        QMessageBox::critical(nullptr, QStringLiteral("MediaSwitcher"),
+            reason + QStringLiteral("\n\nNhật ký chẩn đoán: ") +
+            QDir::current().absoluteFilePath(QStringLiteral("logs/mediaswitcher.log")));
+    }
+    return 1;
+}
+
 QString obsMediaTestPath(const QStringList& arguments) {
     const QString prefix = QStringLiteral("--obs-media-test=");
     for (const QString& argument : arguments) {
@@ -77,17 +113,30 @@ void waitForObsLifecycle(int milliseconds) {
 int main(int argc, char* argv[]) {
     Logger::init();
     LOG_INFO("Starting MediaSwitcher...");
-
-    WorkspaceManager workspaceManager;
-    if (!workspaceManager.initialize()) {
-        LOG_ERROR("Failed to initialize workspace.");
-        return -1;
-    }
+    qInstallMessageHandler(logQtMessage);
+    base_set_log_handler(logObsMessage, nullptr);
 
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(AppInfo::COMPANY);
     QCoreApplication::setApplicationName(AppInfo::NAME);
     QCoreApplication::setApplicationVersion(AppInfo::VERSION);
+    LOG_INFO("Platform: {}; kernel={}; architecture={}; Qt={}",
+             QSysInfo::prettyProductName().toStdString(), QSysInfo::kernelVersion().toStdString(),
+             QSysInfo::currentCpuArchitecture().toStdString(), qVersion());
+
+    WorkspaceManager workspaceManager;
+    if (!workspaceManager.initialize()) {
+        LOG_ERROR("Failed to initialize workspace.");
+        return startupFailure(QStringLiteral("Không thể tạo thư mục làm việc. Kiểm tra quyền ghi của thư mục ứng dụng."));
+    }
+
+    // Exercise the installed dependency chain and GPU without opening the workspace UI.
+    if (QCoreApplication::arguments().contains(QStringLiteral("--startup-smoke-test"))) {
+        ObsContext obsContext;
+        const bool passed = obsContext.initialize();
+        LOG_INFO("Startup smoke test: {}", passed ? "PASS" : "FAIL");
+        return passed ? 0 : 1;
+    }
 
     const QString iconPath = QCoreApplication::applicationDirPath() + "/app_icon.ico";
     QIcon appIcon(iconPath);
@@ -272,14 +321,18 @@ int main(int argc, char* argv[]) {
         ObsContext obsContext;
         if (!obsContext.initialize()) {
             LOG_ERROR("OBS application startup failed because OBS initialization failed.");
-            return -1;
+            return startupFailure(QStringLiteral("Không thể khởi tạo bộ máy phát media. Kiểm tra runtime, dữ liệu OBS và driver đồ họa Direct3D 11."));
         }
         LOG_INFO("OBS initialized: yes");
 
         MediaDiagnostics::instance().start();
         ObsDualMediaTestWindow mainWindow(obsContext);
-        mainWindow.show();
-        LOG_INFO("OBS application running with an empty Input Bank.");
+        mainWindow.showNormal();
+        mainWindow.raise();
+        mainWindow.activateWindow();
+        LOG_INFO("OBS application running with an empty Input Bank; visible={} windowState={} geometry={}x{}+{}+{}.",
+                 mainWindow.isVisible(), static_cast<int>(mainWindow.windowState()),
+                 mainWindow.width(), mainWindow.height(), mainWindow.x(), mainWindow.y());
         const int result = app.exec();
         MediaDiagnostics::instance().stop();
         LOG_INFO("OBS application exiting with code {}.", result);

@@ -50,6 +50,7 @@ extern "C" {
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSlider>
+#include <QSpinBox>
 #include <QSizePolicy>
 #include <QStackedLayout>
 #include <QScreen>
@@ -148,6 +149,9 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, QWidget* par
 
 ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::filesystem::path& mediaPath, QWidget* parent)
     : QWidget(parent), m_context(context), m_selectedProgramRenderMode(ObsRenderMode::AspectFit) {
+    m_tripleZones[0] = {0, 0, 0, 640, 1080, ObsRenderMode::AspectFit, 0, 0, 0, false, false, 1.0f, true, false, false};
+    m_tripleZones[1] = {1, 640, 0, 1920, 1080, ObsRenderMode::AspectFit, 0, 0, 0, false, false, 1.0f, false, false, false};
+    m_tripleZones[2] = {2, 2560, 0, 640, 1080, ObsRenderMode::AspectFit, 0, 0, 0, false, false, 1.0f, true, false, false};
     const QSettings settings;
     m_language = settings.value(QStringLiteral("ui/language"), QStringLiteral("vi")).toString() == QStringLiteral("en")
         ? UiLanguage::English : UiLanguage::Vietnamese;
@@ -184,6 +188,19 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     menuBar->setNativeMenuBar(false);
     auto* fileMenu = menuBar->addMenu(QStringLiteral("File"));
     bindLocalizedProperty(fileMenu, "title", "Tệp", "File");
+    auto* outputMenu = menuBar->addMenu(QStringLiteral("Output"));
+    bindLocalizedProperty(outputMenu, "title", "Đầu ra", "Output");
+    QAction* selectOutputScreenAction = outputMenu->addAction(QStringLiteral("Select Output Screen..."));
+    QAction* toggleOutputAction = outputMenu->addAction(QStringLiteral("Toggle Fullscreen Output"));
+    outputMenu->addSeparator();
+    QAction* tripleSettingsAction = outputMenu->addAction(QStringLiteral("3-Zone Canvas Setup..."));
+    QAction* testPatternAction = outputMenu->addAction(QStringLiteral("Toggle LED Test Pattern"));
+    bindLocalizedProperty(selectOutputScreenAction, "text", "Chọn màn hình output...", "Select Output Screen...");
+    bindLocalizedProperty(toggleOutputAction, "text", "Bật/tắt output toàn màn hình", "Toggle Fullscreen Output");
+    bindLocalizedProperty(tripleSettingsAction, "text", "Cấu hình Canvas 3 vùng...", "3-Zone Canvas Setup...");
+    bindLocalizedProperty(testPatternAction, "text", "Bật/tắt lưới Test Pattern LED", "Toggle LED Test Pattern");
+    connect(tripleSettingsAction, &QAction::triggered, this, &ObsDualMediaTestWindow::showTripleLayoutSettingsDialog);
+    connect(testPatternAction, &QAction::triggered, this, &ObsDualMediaTestWindow::toggleTestPattern);
     rootLayout->setMenuBar(menuBar);
     m_switcherArea = new QWidget(this);
     m_switcherArea->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -227,6 +244,27 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
                           "Open the PGM output fullscreen on the second display");
     transitionControls->addWidget(m_fullscreenButton);
     transitionControls->addSpacing(4);
+    m_zoneSelectorContainer = new QWidget(transitionWidget);
+    auto* zoneSelectorLayout = new QHBoxLayout(m_zoneSelectorContainer);
+    zoneSelectorLayout->setContentsMargins(0, 0, 0, 0);
+    zoneSelectorLayout->setSpacing(3);
+    const char* zoneShortVi[3] = {"TRÁI", "CHÍNH", "PHẢI"};
+    const char* zoneShortEn[3] = {"LEFT", "MAIN", "RIGHT"};
+    for (int z = 0; z < 3; ++z) {
+        auto* btn = new QPushButton(QString::fromUtf8(zoneShortVi[z]), m_zoneSelectorContainer);
+        btn->setCheckable(true);
+        btn->setChecked(z == m_activeZoneIndex);
+        btn->setFixedHeight(24);
+        btn->setStyleSheet(QStringLiteral(
+            "QPushButton { font-size: 9px; font-weight: bold; padding: 1px 2px; background: #26313a; border: 1px solid #485865; }"
+            "QPushButton:checked { background: #1f6b84; border: 1px solid #63d2ee; color: #ffffff; }"));
+        bindLocalizedProperty(btn, "text", zoneShortVi[z], zoneShortEn[z]);
+        connect(btn, &QPushButton::clicked, this, [this, z] { selectActiveZone(z); });
+        zoneSelectorLayout->addWidget(btn, 1);
+        m_railZoneButtons[static_cast<size_t>(z)] = btn;
+    }
+    m_zoneSelectorContainer->hide();
+    transitionControls->addWidget(m_zoneSelectorContainer);
     transitionControls->addWidget(m_quickPlayButton);
     transitionControls->addWidget(m_cutButton);
     transitionControls->addWidget(m_fadeButton);
@@ -286,6 +324,9 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     switcherLayout->addWidget(transitionWidget);
     switcherLayout->addWidget(programPanel, 1);
     rootLayout->addWidget(m_switcherArea);
+    m_tripleDeckWidget = createTripleDeck(this);
+    m_tripleDeckWidget->hide();
+    rootLayout->addWidget(m_tripleDeckWidget);
 
     auto* inputBank = new QWidget(this);
     m_inputBank = inputBank;
@@ -420,6 +461,14 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     m_languageSelector->setCurrentIndex(m_language == UiLanguage::Vietnamese ? 0 : 1);
     bindLocalizedProperty(m_languageSelector, "toolTip", "Chọn ngôn ngữ giao diện", "Select interface language");
     connect(m_languageSelector, &QComboBox::currentIndexChanged, this, &ObsDualMediaTestWindow::setLanguage);
+    m_layoutModeSelector = new QComboBox(m_inputToolbarWidget);
+    m_layoutModeSelector->addItem(QStringLiteral("1 vùng (Single)"), 0);
+    m_layoutModeSelector->addItem(QStringLiteral("3 vùng (Triple)"), 1);
+    m_layoutModeSelector->setToolTip(QStringLiteral("Chế độ bố cục màn hình: 1 vùng hoặc 3 vùng độc lập"));
+    connect(m_layoutModeSelector, &QComboBox::currentIndexChanged, this, [this](int idx) {
+        setLayoutMode(idx == 1 ? LayoutMode::Triple : LayoutMode::Single);
+    });
+    inputToolbar->addWidget(m_layoutModeSelector);
     inputToolbar->addWidget(m_workspaceButton);
     inputToolbar->addWidget(m_addSourceButton);
     inputToolbar->addWidget(m_typeLabel);
@@ -494,10 +543,21 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     footerLayout->addWidget(m_copyrightButton, 0);
     rootLayout->addLayout(footerLayout);
 
-    connect(m_quickPlayButton, &QPushButton::clicked, this, [this] { promotePreviewToProgram("Quick Play"); });
-    connect(m_cutButton, &QPushButton::clicked, this, [this] { promotePreviewToProgram("CUT"); });
-    connect(m_fadeButton, &QPushButton::clicked, this, [this] { fadePreviewToProgram(); });
+    connect(m_quickPlayButton, &QPushButton::clicked, this, [this] {
+        if (m_layoutMode == LayoutMode::Triple) promotePreviewToZone(m_activeZoneIndex, "Quick Play");
+        else promotePreviewToProgram("Quick Play");
+    });
+    connect(m_cutButton, &QPushButton::clicked, this, [this] {
+        if (m_layoutMode == LayoutMode::Triple) promotePreviewToZone(m_activeZoneIndex, "CUT");
+        else promotePreviewToProgram("CUT");
+    });
+    connect(m_fadeButton, &QPushButton::clicked, this, [this] {
+        if (m_layoutMode == LayoutMode::Triple) promotePreviewToZone(m_activeZoneIndex, "CUT");
+        else fadePreviewToProgram();
+    });
     connect(m_fullscreenButton, &QPushButton::clicked, this, &ObsDualMediaTestWindow::toggleProgramOutputFullscreen);
+    connect(selectOutputScreenAction, &QAction::triggered, this, &ObsDualMediaTestWindow::selectOutputScreen);
+    connect(toggleOutputAction, &QAction::triggered, this, &ObsDualMediaTestWindow::toggleProgramOutputFullscreen);
     connect(openWorkspaceAction, &QAction::triggered, this, &ObsDualMediaTestWindow::openWorkspaceDocument);
     connect(saveWorkspaceAction, &QAction::triggered, this, [this] { saveWorkspaceDocument(false); });
     connect(saveWorkspaceAsAction, &QAction::triggered, this, [this] { saveWorkspaceDocument(true); });
@@ -581,15 +641,20 @@ ObsDualMediaTestWindow::ObsDualMediaTestWindow(ObsContext& context, const std::f
     m_timer = new QTimer(this);
     connect(m_timer, &QTimer::timeout, this, [this] {
         updatePanel(m_preview, QStringLiteral("PVW"));
-        updatePanel(m_program, QStringLiteral("PGM"));
-        rememberProgramSnapshot(captureProgramSnapshot());
-        finishFadeIfComplete();
-        if (m_playlistMode && !m_fadeActive && !m_playlist->empty() && m_playlist->isAutoNext() && m_program.backend &&
-            m_program.backend->hasEnded()) {
-            navigatePlaylist(true, "Auto Next");
+        if (m_layoutMode == LayoutMode::Triple) {
+            commitPendingZoneSwaps();
+            updateTripleZonesUi();
+        } else {
+            updatePanel(m_program, QStringLiteral("PGM"));
+            rememberProgramSnapshot(captureProgramSnapshot());
+            finishFadeIfComplete();
+            if (m_playlistMode && !m_fadeActive && !m_playlist->empty() && m_playlist->isAutoNext() && m_program.backend &&
+                m_program.backend->hasEnded()) {
+                navigatePlaylist(true, "Auto Next");
+            }
         }
     });
-    m_timer->start(200);
+    m_timer->start(100);
     m_previewSeekTimer = new QTimer(this);
     m_previewSeekTimer->setSingleShot(true);
     m_previewSeekTimer->setInterval(55);
@@ -635,8 +700,9 @@ bool ObsDualMediaTestWindow::runCueOnlySmokeTest(const std::filesystem::path& me
         for (int attempt = 0; attempt < 60; ++attempt) {
             backend.enforcePendingPause();
             obs_source_t* source = backend.nativeSource();
-            if (backend.state() == ObsPlaybackState::Paused && source &&
-                obs_source_get_base_width(source) > 0 && obs_source_get_base_height(source) > 0) return true;
+            const uint32_t sw = source ? std::max(obs_source_get_width(source), obs_source_get_base_width(source)) : 0;
+            const uint32_t sh = source ? std::max(obs_source_get_height(source), obs_source_get_base_height(source)) : 0;
+            if (backend.state() == ObsPlaybackState::Paused && sw > 0 && sh > 0) return true;
             waitForFrames(25);
         }
         return false;
@@ -668,8 +734,8 @@ bool ObsDualMediaTestWindow::runCueOnlySmokeTest(const std::filesystem::path& me
     waitForFrames(120);
     const PlaybackSnapshot secondCueSnapshot = capturePreviewSnapshot();
     obs_source_t* secondPausedRuntime = m_preview.backend->nativeSource();
-    const uint32_t pausedSourceWidth = secondPausedRuntime ? obs_source_get_base_width(secondPausedRuntime) : 0;
-    const uint32_t pausedSourceHeight = secondPausedRuntime ? obs_source_get_base_height(secondPausedRuntime) : 0;
+    const uint32_t pausedSourceWidth = secondPausedRuntime ? std::max(obs_source_get_width(secondPausedRuntime), obs_source_get_base_width(secondPausedRuntime)) : 0;
+    const uint32_t pausedSourceHeight = secondPausedRuntime ? std::max(obs_source_get_height(secondPausedRuntime), obs_source_get_base_height(secondPausedRuntime)) : 0;
     const bool pausedNativeFrameReady = pausedSourceWidth > 0 && pausedSourceHeight > 0;
     const bool secondCueOnly = m_previewSourceId == secondId && m_stagedPreviewSnapshot.valid &&
         m_stagedPreviewSnapshot.sourceId == secondId && secondPausedRuntime &&
@@ -904,6 +970,17 @@ void ObsDualMediaTestWindow::applyLanguage() {
         m_programRenderMode->setItemText(0, localized("Mặc định", "Default"));
         m_programRenderMode->setItemText(1, localized("Vừa màn hình", "Fit"));
     }
+    if (m_layoutModeSelector && m_layoutModeSelector->count() >= 2) {
+        m_layoutModeSelector->setItemText(0, localized("1 vùng (Single)", "1 Zone (Single)"));
+        m_layoutModeSelector->setItemText(1, localized("3 vùng (Triple)", "3 Zones (Triple)"));
+    }
+    for (auto& zone : m_tripleZones) {
+        if (zone.fitCombo && zone.fitCombo->count() >= 3) {
+            zone.fitCombo->setItemText(0, localized("Vừa (Fit)", "Fit"));
+            zone.fitCombo->setItemText(1, localized("Lấp đầy (Fill)", "Fill"));
+            zone.fitCombo->setItemText(2, localized("Kéo giãn (Stretch)", "Stretch"));
+        }
+    }
     updateInputToolbarPresentation();
 
     if (m_sourceCatalog) refreshCatalogUi();
@@ -914,7 +991,8 @@ void ObsDualMediaTestWindow::applyLanguage() {
                                                   "MediaSwitcher Program Output"));
     }
     updatePanel(m_preview, QStringLiteral("PVW"));
-    updatePanel(m_program, QStringLiteral("PGM"));
+    if (m_layoutMode == LayoutMode::Triple) updateTripleZonesUi();
+    else updatePanel(m_program, QStringLiteral("PGM"));
     updateCopyrightDisplay();
     updateProcessMetrics();
 }
@@ -977,9 +1055,27 @@ void ObsDualMediaTestWindow::keyPressEvent(QKeyEvent* event) {
     switch (event->key()) {
     case Qt::Key_F11: toggleFullscreen(); break;
     case Qt::Key_Space: togglePanelPlayback(m_preview); break;
-    case Qt::Key_Return: togglePanelPlayback(m_program); break;
-    case Qt::Key_C: promotePreviewToProgram("CUT"); break;
-    case Qt::Key_F: fadePreviewToProgram(); break;
+    case Qt::Key_Return:
+        if (m_layoutMode == LayoutMode::Triple) toggleZonePlayback(m_activeZoneIndex);
+        else togglePanelPlayback(m_program);
+        break;
+    case Qt::Key_C:
+        if (m_layoutMode == LayoutMode::Triple) promotePreviewToZone(m_activeZoneIndex, "CUT");
+        else promotePreviewToProgram("CUT");
+        break;
+    case Qt::Key_F:
+        if (m_layoutMode == LayoutMode::Triple) promotePreviewToZone(m_activeZoneIndex, "CUT");
+        else fadePreviewToProgram();
+        break;
+    case Qt::Key_1:
+        if (m_layoutMode == LayoutMode::Triple) selectActiveZone(0);
+        break;
+    case Qt::Key_2:
+        if (m_layoutMode == LayoutMode::Triple) selectActiveZone(1);
+        break;
+    case Qt::Key_3:
+        if (m_layoutMode == LayoutMode::Triple) selectActiveZone(2);
+        break;
     default: QWidget::keyPressEvent(event); return;
     }
     event->accept();
@@ -987,7 +1083,12 @@ void ObsDualMediaTestWindow::keyPressEvent(QKeyEvent* event) {
 
 void ObsDualMediaTestWindow::draw(void* parameter, uint32_t width, uint32_t height) {
     auto* panel = static_cast<Panel*>(parameter);
-    if (!panel || !panel->backend) return;
+    if (!panel || !panel->owner) return;
+    if (panel == &panel->owner->m_program && panel->owner->m_layoutMode == LayoutMode::Triple) {
+        panel->owner->renderProgramCanvas(width, height, true);
+        return;
+    }
+    if (!panel->backend) return;
     panel->backend->render(width, height);
     captureSourceThumbnail(*panel);
 }
@@ -1258,16 +1359,27 @@ QWidget* ObsDualMediaTestWindow::createPanel(Panel& panel, const QString& title,
     connect(panel.resetButton, &QPushButton::clicked, this, [this, &panel] { resetPanel(panel); });
     connect(panel.seekBackButton, &QPushButton::clicked, this, [this, &panel] { seekPanel(panel, -10000); });
     connect(panel.seekForwardButton, &QPushButton::clicked, this, [this, &panel] { seekPanel(panel, 10000); });
-    connect(panel.volumeSlider, &QSlider::valueChanged, this, [&panel](int value) {
+    connect(panel.volumeSlider, &QSlider::valueChanged, this, [this, &panel](int value) {
         panel.volume = static_cast<float>(value) / 100.0f;
         panel.volumeValueLabel->setText(QStringLiteral("%1%").arg(value));
         if (panel.backend) panel.backend->setVolume(panel.audioMuted ? 0.0f : panel.volume);
+        if (&panel == &m_program && m_layoutMode == LayoutMode::Triple) {
+            for (auto& z : m_tripleZones) {
+                z.volume = panel.volume;
+                if (z.activeBackend) z.activeBackend->setVolume((panel.audioMuted || z.audioMuted) ? 0.0f : z.volume);
+            }
+        }
     });
     connect(panel.muteButton, &QPushButton::toggled, this, [this, &panel](bool muted) {
         panel.audioMuted = muted;
         panel.muteButton->setIcon(style()->standardIcon(muted ? QStyle::SP_MediaVolumeMuted : QStyle::SP_MediaVolume));
         panel.muteButton->setToolTip(muted ? localized("Bật tiếng", "Unmute") : localized("Tắt tiếng", "Mute"));
         if (panel.backend) panel.backend->setVolume(muted ? 0.0f : panel.volume);
+        if (&panel == &m_program && m_layoutMode == LayoutMode::Triple) {
+            for (auto& z : m_tripleZones) {
+                if (z.activeBackend) z.activeBackend->setVolume((muted || z.audioMuted) ? 0.0f : z.volume);
+            }
+        }
     });
     connect(panel.seekSlider, &QSlider::sliderPressed, this, [&panel] { panel.sliderDragging = true; });
     connect(panel.seekSlider, &QSlider::sliderMoved, this, [this, &panel](int value) {
@@ -1522,6 +1634,7 @@ void ObsDualMediaTestWindow::updateInputToolbarPresentation() {
 void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
     if (!panel.backend || !panel.backend->isOpen()) return;
     panel.backend->enforcePendingPause();
+    const ObsPlaybackState playbackState = panel.backend->state();
     const bool supportsTransport = panel.backend->supportsTransport();
     const bool supportsAudio = panel.backend->supportsAudio();
     const bool stagedCue = &panel == &m_preview && !m_previewTransportStarted &&
@@ -1540,7 +1653,7 @@ void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
     panel.muteButton->setEnabled(supportsAudio);
     if (!supportsAudio) panel.audioMeter->reset();
     if (!panel.sliderDragging && supportsTransport && duration > 0) panel.seekSlider->setValue(static_cast<int>(position * 1000 / duration));
-    const bool isPlaying = !stagedCue && panel.backend->state() == ObsPlaybackState::Playing;
+    const bool isPlaying = !stagedCue && playbackState == ObsPlaybackState::Playing;
     panel.playPauseButton->setIcon(style()->standardIcon(isPlaying ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
     panel.playPauseButton->setToolTip(isPlaying ? localized("Tạm dừng", "Pause") : localized("Phát", "Play"));
     panel.loopButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
@@ -1550,8 +1663,19 @@ void ObsDualMediaTestWindow::updatePanel(Panel& panel, const QString& role) {
     panel.loopButton->style()->polish(panel.loopButton);
     panel.loopButton->setToolTip(looping
         ? localized("Tắt lặp lại", "Disable loop") : localized("Bật lặp lại", "Enable loop"));
-    panel.timeLabel->setText(panel.backend->isLiveInput() ? QStringLiteral("LIVE")
-        : (supportsTransport ? formatTimeline(position, duration) : QStringLiteral("STILL")));
+    const bool sourceError = playbackState == ObsPlaybackState::Error;
+    const bool sourceConnecting = panel.backend->isLiveInput() &&
+        (playbackState == ObsPlaybackState::Opening || playbackState == ObsPlaybackState::Buffering ||
+         playbackState == ObsPlaybackState::None);
+    panel.timeLabel->setText(sourceError ? localized("MẤT KẾT NỐI", "OFFLINE")
+        : (sourceConnecting ? localized("ĐANG KẾT NỐI", "CONNECTING")
+        : (panel.backend->isLiveInput() ? QStringLiteral("LIVE")
+        : (supportsTransport ? formatTimeline(position, duration) : QStringLiteral("STILL")))));
+    panel.timeLabel->setStyleSheet(sourceError
+        ? QStringLiteral("color: #ff7084; border: 0; font-family: Consolas; font-size: 11px; font-weight: bold; padding: 0 2px;")
+        : (sourceConnecting
+            ? QStringLiteral("color: #ffd36a; border: 0; font-family: Consolas; font-size: 11px; font-weight: bold; padding: 0 2px;")
+            : QStringLiteral("color: #a9e9f7; border: 0; font-family: Consolas; font-size: 11px; font-weight: bold; padding: 0 2px;")));
     const uint64_t sourceId = &panel == &m_preview ? m_previewSourceId : m_programSourceId;
     const auto catalogSource = m_sourceCatalog ? m_sourceCatalog->find(sourceId) : std::nullopt;
     const QString sourceName = catalogSource ? catalogSourceName(*catalogSource, m_language == UiLanguage::Vietnamese)
@@ -1565,6 +1689,17 @@ void ObsDualMediaTestWindow::updateAudioMeters() {
     const auto updateMeter = [this](Panel& panel) {
         if (&panel == &m_preview && !m_previewTransportStarted) {
             if (panel.audioMeter) panel.audioMeter->reset();
+            return;
+        }
+        if (&panel == &m_program && m_layoutMode == LayoutMode::Triple) {
+            if (!panel.audioMeter) return;
+            for (auto& zone : m_tripleZones) {
+                if (!zone.audioMuted && zone.activeBackend && zone.activeBackend->isOpen() && zone.activeBackend->supportsAudio()) {
+                    panel.audioMeter->setLevels(zone.activeBackend->takeLeftAudioPeak(), zone.activeBackend->takeRightAudioPeak());
+                    return;
+                }
+            }
+            panel.audioMeter->reset();
             return;
         }
         if (!panel.audioMeter || !panel.backend || !panel.backend->isOpen() || !panel.backend->supportsAudio()) {
@@ -1588,10 +1723,17 @@ void ObsDualMediaTestWindow::updateProcessMetrics() {
         ? static_cast<double>(frameRate.numerator) / static_cast<double>(frameRate.denominator)
         : 0.0;
     const size_t sourceCount = m_sourceCatalog ? m_sourceCatalog->sources().size() : 0;
-    const int activeDecoders =
+    int activeDecoders =
         (m_preview.backend && m_preview.backend->isOpen() ? 1 : 0) +
         (m_program.backend && m_program.backend->isOpen() ? 1 : 0) +
         (m_program.fadeOutgoing && m_program.fadeOutgoing->isOpen() ? 1 : 0);
+    if (m_layoutMode == LayoutMode::Triple) {
+        activeDecoders = (m_preview.backend && m_preview.backend->isOpen() ? 1 : 0);
+        for (const auto& z : m_tripleZones) {
+            if (z.activeBackend && z.activeBackend->isOpen()) ++activeDecoders;
+            if (z.pendingBackend && z.pendingBackend->isOpen()) ++activeDecoders;
+        }
+    }
     const bool compactLayout = width() < 990 || height() >= width();
 
     if (compactLayout) {
@@ -1945,7 +2087,7 @@ void ObsDualMediaTestWindow::rememberProgramSnapshot(const PlaybackSnapshot& sna
 }
 
 bool ObsDualMediaTestWindow::openCatalogSource(ObsPlaybackBackend& backend, uint64_t sourceId, bool startPaused) {
-    const auto source = m_sourceCatalog->find(sourceId);
+    auto source = m_sourceCatalog->find(sourceId);
     if (!source) {
         LOG_ERROR("OBS app: Catalog source #{} is unavailable.", sourceId);
         return false;
@@ -2572,6 +2714,65 @@ void ObsDualMediaTestWindow::removeCatalogSource() {
     removeCatalogSource(item->data(Qt::UserRole).toULongLong());
 }
 
+void ObsDualMediaTestWindow::retryCatalogSource(uint64_t sourceId) {
+    if (m_fadeActive || !m_sourceCatalog) return;
+    auto source = m_sourceCatalog->find(sourceId);
+    if (!source || source->systemSource) return;
+
+    if (source->type != ObsCatalogSourceType::RtspCamera &&
+        !std::filesystem::is_regular_file(source->path)) {
+        const QString oldPath = QString::fromStdWString(source->path.wstring());
+        const QString replacement = QFileDialog::getOpenFileName(
+            this, localized("Tìm lại file nguồn", "Relink Source File"),
+            QFileInfo(oldPath).absolutePath(),
+            localized("Tệp media và hình ảnh (*.mp4 *.mkv *.mov *.avi *.m4v *.webm *.mp3 *.wav *.flac *.aac *.m4a *.ogg *.opus *.jpg *.jpeg *.png *.bmp *.webp *.gif *.tiff);;Tất cả file (*)",
+                      "Media and image files (*.mp4 *.mkv *.mov *.avi *.m4v *.webm *.mp3 *.wav *.flac *.aac *.m4a *.ogg *.opus *.jpg *.jpeg *.png *.bmp *.webp *.gif *.tiff);;All files (*)"));
+        if (replacement.isEmpty()) {
+            refreshCatalogUi();
+            return;
+        }
+        if (!m_sourceCatalog->relinkLocalFile(sourceId, std::filesystem::path(replacement.toStdWString()))) {
+            QMessageBox::warning(this, localized("Không thể liên kết file", "Relink failed"),
+                                 localized("File được chọn không hợp lệ hoặc không thể truy cập.",
+                                           "The selected file is invalid or inaccessible."));
+            return;
+        }
+        source = m_sourceCatalog->find(sourceId);
+        if (!source) return;
+        saveWorkspace();
+        LOG_INFO("OBS source catalog: source #{} relinked to '{}'.", sourceId, replacement.toUtf8().constData());
+    }
+
+    if (sourceId == m_programSourceId && m_program.backend) {
+        const PlaybackSnapshot snapshot = captureProgramSnapshot();
+        m_program.backend->close();
+        m_program.backend->setAudioOutputEnabled(true);
+        m_program.backend->setVolume(m_program.audioMuted ? 0.0f : m_program.volume);
+        m_program.backend->setLooping(snapshot.looping);
+        if (!m_program.backend->open(*source)) {
+            QMessageBox::warning(this, localized("Không thể mở lại nguồn", "Retry failed"),
+                                 localized("Nguồn chưa thể kết nối hoặc mở lại. Hãy kiểm tra file, mạng và RTSP URL.",
+                                           "The source could not be reopened. Check the file, network and RTSP URL."));
+            refreshCatalogUi();
+            return;
+        }
+        if (obsCatalogSourceHasTimeline(source->type) && snapshot.positionMs > 0) {
+            m_program.backend->seekMs(snapshot.positionMs);
+        }
+        m_program.backend->play();
+        initializeDisplay(m_program);
+        resizeDisplay(m_program);
+    } else {
+        stagePreviewSource(*source);
+    }
+
+    if (source->type != ObsCatalogSourceType::RtspCamera) {
+        ObsThumbnailService::instance().request(source->id, source->path, source->type);
+    }
+    refreshCatalogUi();
+    LOG_INFO("OBS source catalog: retry requested for source #{}.", sourceId);
+}
+
 void ObsDualMediaTestWindow::removeCatalogSource(uint64_t sourceId) {
     if (m_fadeActive) {
         LOG_WARN("OBS source catalog: source #{} removal rejected while FADE is active.", sourceId);
@@ -2586,10 +2787,12 @@ void ObsDualMediaTestWindow::removeCatalogSource(uint64_t sourceId) {
     }
 
     const bool clearsPreview = sourceId == m_previewSourceId;
-    if (sourceId == m_programSourceId) {
+    const bool inTripleZone = m_layoutMode == LayoutMode::Triple &&
+        (sourceId == m_tripleZones[0].sourceId || sourceId == m_tripleZones[1].sourceId || sourceId == m_tripleZones[2].sourceId);
+    if ((m_layoutMode == LayoutMode::Single && sourceId == m_programSourceId) || inTripleZone) {
         QMessageBox::information(this, localized("PGM đang phát", "PGM is live"),
-                                 localized("Không thể xoá nguồn đang phát trên PGM. Hãy chuyển nguồn khác lên PGM trước.",
-                                           "The source currently live on PGM cannot be removed. Switch another source to PGM first."));
+                                 localized("Không thể xoá nguồn đang phát trên PGM/Vùng. Hãy chuyển nguồn khác lên trước.",
+                                           "The source currently live on PGM/Zone cannot be removed. Switch another source first."));
         LOG_WARN("OBS source catalog: removal of live Program source #{} rejected.", sourceId);
         return;
     }
@@ -2761,22 +2964,37 @@ void ObsDualMediaTestWindow::refreshCatalogUi() {
         if (selectedType >= 0 && selectedType != static_cast<int>(source.type)) continue;
         const int displaySlot = static_cast<int>(index + 1);
         const QFileInfo info(QString::fromStdWString(source.path.wstring()));
+        const bool missingLocalFile = source.type != ObsCatalogSourceType::RtspCamera &&
+            source.type != ObsCatalogSourceType::ColorBlank && !info.isFile();
         const bool vietnamese = m_language == UiLanguage::Vietnamese;
         const QString sourceName = catalogSourceName(source, vietnamese);
-        auto* item = new QListWidgetItem(QStringLiteral("#%1  [%2] %3").arg(displaySlot).arg(catalogSourceBadge(source, vietnamese), sourceName), m_sourceCatalogList);
+        const QString availability = missingLocalFile ? localized("THIẾU FILE", "MISSING")
+            : catalogSourceBadge(source, vietnamese);
+        auto* item = new QListWidgetItem(QStringLiteral("#%1  [%2] %3").arg(displaySlot).arg(availability, sourceName), m_sourceCatalogList);
         item->setSizeHint(itemSize);
         item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(source.id));
         item->setToolTip(source.type == ObsCatalogSourceType::RtspCamera ? QString::fromUtf8(source.endpoint.c_str()) : info.absoluteFilePath());
-        auto* tile = new CatalogTileWidget([this, item, source] {
+        auto* tile = new CatalogTileWidget([this, item, source, missingLocalFile] {
             m_sourceCatalogList->setCurrentItem(item);
-            if (!m_fadeActive) stagePreviewSource(source);
+            if (m_fadeActive) return;
+            if (missingLocalFile) retryCatalogSource(source.id);
+            else stagePreviewSource(source);
         }, m_sourceCatalogList);
         tile->setFixedSize(itemSize);
-        const bool isProgram = source.id == m_programSourceId && m_program.backend && m_program.backend->isOpen();
+        const bool isSingleProgram = m_layoutMode == LayoutMode::Single &&
+            source.id == m_programSourceId && m_program.backend && m_program.backend->isOpen();
+        const bool isZoneLeft = m_layoutMode == LayoutMode::Triple &&
+            source.id == m_tripleZones[0].sourceId && m_tripleZones[0].activeBackend && m_tripleZones[0].activeBackend->isOpen();
+        const bool isZoneMain = m_layoutMode == LayoutMode::Triple &&
+            source.id == m_tripleZones[1].sourceId && m_tripleZones[1].activeBackend && m_tripleZones[1].activeBackend->isOpen();
+        const bool isZoneRight = m_layoutMode == LayoutMode::Triple &&
+            source.id == m_tripleZones[2].sourceId && m_tripleZones[2].activeBackend && m_tripleZones[2].activeBackend->isOpen();
+        const bool isProgram = isSingleProgram || isZoneLeft || isZoneMain || isZoneRight;
         const bool isPreview = source.id == m_previewSourceId;
-        const QString borderColor = isProgram ? QStringLiteral("#8c4f5d")
-            : (isPreview ? QStringLiteral("#3f91aa") : QStringLiteral("#303944"));
-        const int borderWidth = (isProgram || isPreview) ? 2 : 1;
+        const QString borderColor = missingLocalFile ? QStringLiteral("#d34a5d")
+            : (isProgram ? QStringLiteral("#8c4f5d")
+            : (isPreview ? QStringLiteral("#3f91aa") : QStringLiteral("#303944")));
+        const int borderWidth = (missingLocalFile || isProgram || isPreview) ? 2 : 1;
         tile->setStyleSheet(QStringLiteral("background: #1b2128; border: %1px solid %2;")
             .arg(borderWidth).arg(borderColor));
         auto* tileLayout = new QVBoxLayout(tile);
@@ -2811,9 +3029,21 @@ void ObsDualMediaTestWindow::refreshCatalogUi() {
         }
         previewWidget->setAttribute(Qt::WA_TransparentForMouseEvents);
         tileLayout->addWidget(previewWidget, 0, Qt::AlignHCenter);
+        QString zoneTag;
+        if (m_layoutMode == LayoutMode::Triple && isProgram) {
+            QStringList tags;
+            if (isZoneLeft) tags << QStringLiteral("L");
+            if (isZoneMain) tags << QStringLiteral("M");
+            if (isZoneRight) tags << QStringLiteral("R");
+            zoneTag = QStringLiteral("PGM:") + tags.join(QLatin1Char('/'));
+        } else if (isSingleProgram) {
+            zoneTag = QStringLiteral("PGM");
+        } else {
+            zoneTag = catalogSourceBadge(source, vietnamese);
+        }
         auto* title = new QLabel(QStringLiteral("#%1  [%2]%3 %4")
             .arg(displaySlot)
-            .arg(isProgram ? QStringLiteral("PGM") : catalogSourceBadge(source, vietnamese))
+            .arg(missingLocalFile ? localized("THIẾU FILE", "MISSING") : zoneTag)
             .arg(isPreview && !isProgram ? QStringLiteral(" PVW") : QString{})
             .arg(sourceName), tile);
         title->setFixedHeight(19);
@@ -2836,6 +3066,20 @@ void ObsDualMediaTestWindow::refreshCatalogUi() {
             removeButton->move(itemSize.width() - 17, -1);
             connect(removeButton, &QToolButton::clicked, this, [this, sourceId = source.id] { removeCatalogSource(sourceId); });
             removeButton->raise();
+
+            if (missingLocalFile || source.type == ObsCatalogSourceType::RtspCamera) {
+                auto* retryButton = new QToolButton(tile);
+                retryButton->setFixedSize(18, 16);
+                retryButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+                retryButton->setToolTip(localized("Thử kết nối/mở lại nguồn", "Retry source"));
+                retryButton->setStyleSheet(QStringLiteral(
+                    "QToolButton { background: #245b70; border: 1px solid #68b5cd; border-radius: 1px; padding: 0; }"
+                    "QToolButton:hover { background: #3383a0; border-color: #b9efff; }"));
+                retryButton->move(itemSize.width() - 37, -1);
+                connect(retryButton, &QToolButton::clicked, this,
+                        [this, sourceId = source.id] { retryCatalogSource(sourceId); });
+                retryButton->raise();
+            }
         }
         m_sourceCatalogList->setItemWidget(item, tile);
     }
@@ -3112,6 +3356,7 @@ uint64_t ObsDualMediaTestWindow::restoreWorkspace() {
         return 0;
     }
 
+    applyWorkspaceSettings(state, false);
     const uint64_t restoredPreviewId = appendWorkspaceState(state);
     LOG_INFO("OBS workspace: automatic session loaded from '{}'.", m_workspaceStateStore->filePath().string());
     return restoredPreviewId;
@@ -3159,7 +3404,32 @@ uint64_t ObsDualMediaTestWindow::appendWorkspaceState(const WorkspaceState& stat
     uint64_t restoredPreviewId = 0;
     if (const auto restored = restoredIds.find(state.previewSourceId); restored != restoredIds.end()) {
         restoredPreviewId = restored->second;
+        m_lastProgramSnapshots[restoredPreviewId] = {
+            restoredPreviewId, state.previewPositionMs, 0, state.previewLoop, true};
     }
+    if (const auto restored = restoredIds.find(state.programSourceId); restored != restoredIds.end()) {
+        m_lastProgramSnapshots[restored->second] = {
+            restored->second, state.programPositionMs, 0, state.programLoop, true};
+    }
+
+    for (size_t z = 0; z < 3; ++z) {
+        auto& zone = m_tripleZones[z];
+        const auto& savedZone = state.zones[z];
+        uint64_t restoredZoneSourceId = 0;
+        if (const auto it = restoredIds.find(savedZone.sourceId); it != restoredIds.end()) {
+            restoredZoneSourceId = it->second;
+            m_lastProgramSnapshots[restoredZoneSourceId] = {
+                restoredZoneSourceId, savedZone.positionMs, 0, savedZone.loop, true};
+        }
+        zone.sourceId = restoredZoneSourceId;
+    }
+
+    if (state.layoutMode == 1) {
+        setLayoutMode(LayoutMode::Triple);
+    } else {
+        setLayoutMode(LayoutMode::Single);
+    }
+
     LOG_INFO("OBS workspace: restored {} source(s), {} playlist step(s); skipped {} invalid source(s).",
              restoredIds.size(), m_playlist->size(), skippedSources);
     return restoredPreviewId;
@@ -3181,7 +3451,120 @@ WorkspaceState ObsDualMediaTestWindow::captureWorkspaceState() const {
     state.programSourceId = m_programSourceId;
     state.playlistLoop = m_playlist->isLooping();
     state.playlistAutoNext = m_playlist->isAutoNext();
+    const ObsVideoFrameRate frameRate = m_context.videoFrameRate();
+    state.fpsNumerator = frameRate.numerator;
+    state.fpsDenominator = frameRate.denominator;
+    state.programRenderMode = static_cast<int>(m_selectedProgramRenderMode);
+    state.fadeDurationMs = m_fadeDuration ? m_fadeDuration->currentData().toInt() : 700;
+    state.thumbnailWidth = m_catalogThumbnailWidth;
+    state.sourceTypeFilter = m_sourceTypeFilter ? m_sourceTypeFilter->currentData().toInt() : -1;
+    const PlaybackSnapshot preview = capturePreviewSnapshot();
+    const PlaybackSnapshot program = captureProgramSnapshot();
+    state.previewPositionMs = preview.positionMs;
+    state.programPositionMs = program.positionMs;
+    state.previewLoop = preview.looping;
+    state.programLoop = program.looping;
+    state.previewVolume = m_preview.volume;
+    state.programVolume = m_program.volume;
+    state.previewMuted = m_preview.audioMuted;
+    state.programMuted = m_program.audioMuted;
+    state.outputScreenName = m_outputScreenName;
+    state.layoutMode = m_layoutMode == LayoutMode::Triple ? 1 : 0;
+    state.canvasWidth = m_canvasWidth;
+    state.canvasHeight = m_canvasHeight;
+    state.activeZoneIndex = m_activeZoneIndex;
+    state.blackoutAll = m_blackoutAll.load();
+    for (size_t z = 0; z < 3; ++z) {
+        const auto& zone = m_tripleZones[z];
+        auto& out = state.zones[z];
+        out.x = zone.x;
+        out.y = zone.y;
+        out.width = zone.width;
+        out.height = zone.height;
+        out.renderMode = static_cast<int>(zone.renderMode);
+        out.sourceId = zone.sourceId;
+        out.positionMs = zone.activeBackend && zone.activeBackend->isOpen() ? zone.activeBackend->positionMs() : 0;
+        out.loop = zone.activeBackend && zone.activeBackend->isOpen() ? zone.activeBackend->isLooping() : zone.looping;
+        out.volume = zone.volume;
+        out.muted = zone.audioMuted;
+        out.blackout = zone.blackout;
+    }
     return state;
+}
+
+void ObsDualMediaTestWindow::applyWorkspaceSettings(const WorkspaceState& state, bool applyFrameRate) {
+    if (applyFrameRate && state.fpsNumerator > 0 && state.fpsDenominator > 0) {
+        const ObsVideoFrameRate requested{state.fpsNumerator, state.fpsDenominator};
+        if (m_context.setVideoFrameRate(requested) && m_projectFrameRate) {
+            const auto& frameRates = ObsContext::supportedVideoFrameRates();
+            const auto selected = std::find(frameRates.begin(), frameRates.end(), requested);
+            if (selected != frameRates.end()) {
+                const QSignalBlocker blocker(m_projectFrameRate);
+                m_projectFrameRate->setCurrentIndex(static_cast<int>(std::distance(frameRates.begin(), selected)));
+            }
+        }
+    }
+
+    if (m_programRenderMode) {
+        const int index = m_programRenderMode->findData(state.programRenderMode);
+        if (index >= 0) {
+            const QSignalBlocker blocker(m_programRenderMode);
+            m_programRenderMode->setCurrentIndex(index);
+            m_selectedProgramRenderMode = static_cast<ObsRenderMode>(state.programRenderMode);
+        }
+    }
+    if (m_program.backend) m_program.backend->setRenderMode(m_selectedProgramRenderMode);
+    if (m_fadeDuration) {
+        const int index = m_fadeDuration->findData(state.fadeDurationMs);
+        if (index >= 0) m_fadeDuration->setCurrentIndex(index);
+    }
+    if (m_catalogThumbnailSize) {
+        const int index = m_catalogThumbnailSize->findData(state.thumbnailWidth);
+        if (index >= 0) m_catalogThumbnailSize->setCurrentIndex(index);
+    }
+    if (m_sourceTypeFilter) {
+        const int index = m_sourceTypeFilter->findData(state.sourceTypeFilter);
+        if (index >= 0) m_sourceTypeFilter->setCurrentIndex(index);
+    }
+    if (m_preview.volumeSlider) m_preview.volumeSlider->setValue(qRound(state.previewVolume * 100.0f));
+    if (m_program.volumeSlider) m_program.volumeSlider->setValue(qRound(state.programVolume * 100.0f));
+    if (m_preview.muteButton) m_preview.muteButton->setChecked(state.previewMuted);
+    if (m_program.muteButton) m_program.muteButton->setChecked(state.programMuted);
+    m_outputScreenName = state.outputScreenName;
+    m_canvasWidth = std::clamp(state.canvasWidth, 16, 16384);
+    m_canvasHeight = std::clamp(state.canvasHeight, 16, 16384);
+    m_activeZoneIndex = std::clamp(state.activeZoneIndex, 0, 2);
+    m_blackoutAll.store(state.blackoutAll);
+    if (m_blackoutAllButton) {
+        const QSignalBlocker blocker(m_blackoutAllButton);
+        m_blackoutAllButton->setChecked(state.blackoutAll);
+    }
+    for (size_t z = 0; z < 3; ++z) {
+        auto& zone = m_tripleZones[z];
+        const auto& in = state.zones[z];
+        zone.x = in.x;
+        zone.y = in.y;
+        zone.width = in.width;
+        zone.height = in.height;
+        zone.renderMode = static_cast<ObsRenderMode>(std::clamp(in.renderMode, 0, 2));
+        zone.looping = in.loop;
+        zone.volume = in.volume;
+        zone.audioMuted = in.muted;
+        zone.blackout = in.blackout;
+        if (zone.fitCombo) {
+            const int fitIdx = zone.fitCombo->findData(static_cast<int>(zone.renderMode));
+            if (fitIdx >= 0) {
+                const QSignalBlocker blocker(zone.fitCombo);
+                zone.fitCombo->setCurrentIndex(fitIdx);
+            }
+        }
+        if (zone.blackoutButton) {
+            const QSignalBlocker blocker(zone.blackoutButton);
+            zone.blackoutButton->setChecked(zone.blackout);
+        }
+    }
+    m_testPatternDirty.store(true);
+    selectActiveZone(m_activeZoneIndex);
 }
 
 bool ObsDualMediaTestWindow::replaceWorkspace(const WorkspaceState& state) {
@@ -3213,6 +3596,7 @@ bool ObsDualMediaTestWindow::replaceWorkspace(const WorkspaceState& state) {
 
     m_playlist = std::make_unique<ObsPlaylist>();
     m_sourceCatalog = std::make_unique<ObsSourceCatalog>();
+    applyWorkspaceSettings(state, true);
     const uint64_t previewBlankId = m_sourceCatalog->addSystemBlank("Blank 1");
     const uint64_t programBlankId = m_sourceCatalog->addSystemBlank("Blank 2");
     if (const auto blank = m_sourceCatalog->find(previewBlankId)) stagePreviewSource(*blank);
@@ -3331,6 +3715,54 @@ void ObsDualMediaTestWindow::toggleFullscreen() {
     else showFullScreen();
 }
 
+QScreen* ObsDualMediaTestWindow::selectedOutputScreen() const {
+    const QList<QScreen*> screens = QGuiApplication::screens();
+    if (!m_outputScreenName.empty()) {
+        const QString selectedName = QString::fromUtf8(m_outputScreenName.c_str());
+        const auto selected = std::find_if(screens.begin(), screens.end(), [&selectedName](QScreen* screen) {
+            return screen && screen->name() == selectedName;
+        });
+        return selected != screens.end() ? *selected : nullptr;
+    }
+    return screens.size() >= 2 ? screens.at(1) : nullptr;
+}
+
+void ObsDualMediaTestWindow::selectOutputScreen() {
+    const QList<QScreen*> screens = QGuiApplication::screens();
+    if (screens.isEmpty()) return;
+
+    QStringList choices;
+    int selectedIndex = 0;
+    const QString currentName = QString::fromUtf8(m_outputScreenName.c_str());
+    for (int index = 0; index < screens.size(); ++index) {
+        QScreen* screen = screens.at(index);
+        const QRect geometry = screen->geometry();
+        choices.push_back(QStringLiteral("%1 — %2×%3 (%4,%5)%6")
+            .arg(screen->name())
+            .arg(geometry.width()).arg(geometry.height())
+            .arg(geometry.x()).arg(geometry.y())
+            .arg(screen == QGuiApplication::primaryScreen()
+                ? localized(" — Màn hình chính", " — Primary") : QString{}));
+        if (screen->name() == currentName) selectedIndex = index;
+    }
+
+    bool accepted = false;
+    const QString selected = QInputDialog::getItem(
+        this, localized("Chọn màn hình output", "Select Output Screen"),
+        localized("Màn hình dùng cho PGM toàn màn hình:", "Screen for fullscreen PGM output:"),
+        choices, selectedIndex, false, &accepted);
+    if (!accepted) return;
+    const int index = choices.indexOf(selected);
+    if (index < 0 || index >= screens.size()) return;
+
+    const bool reopenOutput = m_programOutput && m_programOutput->isVisible();
+    if (reopenOutput) m_programOutput->hide();
+    m_outputScreenName = screens.at(index)->name().toUtf8().toStdString();
+    saveWorkspace();
+    LOG_INFO("OBS program output: selected screen '{}'.", m_outputScreenName);
+    if (reopenOutput) toggleProgramOutputFullscreen();
+}
+
 void ObsDualMediaTestWindow::toggleProgramOutputFullscreen() {
     if (m_programOutput && m_programOutput->isVisible()) {
         m_programOutput->hide();
@@ -3338,24 +3770,47 @@ void ObsDualMediaTestWindow::toggleProgramOutputFullscreen() {
         return;
     }
 
-    const QList<QScreen*> screens = QGuiApplication::screens();
-    if (screens.size() < 2) {
+    QScreen* outputScreen = selectedOutputScreen();
+    if (!outputScreen) {
         QMessageBox::information(this, localized("TOÀN MÀN HÌNH", "FULL SCREEN"),
-                                 localized("Cần kết nối màn hình thứ hai để mở output PGM toàn màn hình.",
-                                           "Connect a second display to open the PGM fullscreen output."));
-        LOG_WARN("OBS program output: fullscreen output requested, but no second screen is available.");
+                                 localized("Màn hình output đã chọn không còn khả dụng. Hãy vào Đầu ra → Chọn màn hình output.",
+                                           "The selected output screen is unavailable. Choose Output → Select Output Screen."));
+        LOG_WARN("OBS program output: selected fullscreen screen is unavailable.");
         return;
     }
 
+    if (m_layoutMode == LayoutMode::Triple) {
+        const QRect screenGeom = outputScreen->geometry();
+        if (screenGeom.width() != m_canvasWidth || screenGeom.height() != m_canvasHeight) {
+            const auto reply = QMessageBox::warning(
+                this,
+                localized("Cảnh báo độ phân giải Output", "Output Resolution Mismatch"),
+                localized("Canvas 3 vùng khai báo: %1×%2 px\nMàn hình output '%3' hiện tại: %4×%5 px\n\n"
+                          "Để mapping đúng từng pixel sang bộ xử lý LED (Colorlight), kích thước màn hình nên khớp với Canvas.\n"
+                          "Bạn có muốn tiếp tục mở Output (vẽ đúng toạ độ pixel gốc) không?",
+                          "Configured 3-zone Canvas: %1×%2 px\nSelected output screen '%3': %4×%5 px\n\n"
+                          "For pixel-perfect LED processor mapping, screen resolution should match Canvas.\n"
+                          "Do you want to open Output anyway (1:1 pixel mapping)?")
+                    .arg(m_canvasWidth).arg(m_canvasHeight)
+                    .arg(outputScreen->name())
+                    .arg(screenGeom.width()).arg(screenGeom.height()),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+            if (reply != QMessageBox::Yes) return;
+        }
+    }
+
     if (!m_programOutput) {
-        m_programOutput = std::make_unique<ObsProgramOutputWindow>([this] {
-            return m_program.backend.get();
-        });
+        m_programOutput = std::make_unique<ObsProgramOutputWindow>([this](uint32_t w, uint32_t h) {
+            if (m_layoutMode == LayoutMode::Triple) {
+                renderProgramCanvas(w, h, false);
+            } else if (m_program.backend && m_program.backend->isOpen()) {
+                m_program.backend->render(w, h);
+            }
+        }, nullptr, true);
     }
     m_programOutput->setWindowTitle(localized("MediaSwitcher - Output chương trình",
                                               "MediaSwitcher Program Output"));
 
-    QScreen* outputScreen = screens.at(1);
     m_programOutput->setGeometry(outputScreen->geometry());
     m_programOutput->winId();
     if (m_programOutput->windowHandle()) m_programOutput->windowHandle()->setScreen(outputScreen);
@@ -3373,5 +3828,874 @@ void ObsDualMediaTestWindow::closePanels() {
         if (panel->backend) panel->backend->close();
         if (panel->fadeOutgoing) panel->fadeOutgoing->close();
     }
+    {
+        std::lock_guard<std::mutex> lock(m_tripleRenderMutex);
+        for (auto& zone : m_tripleZones) {
+            if (zone.activeBackend) zone.activeBackend->close();
+            if (zone.pendingBackend) zone.pendingBackend->close();
+            zone.activeBackend.reset();
+            zone.pendingBackend.reset();
+        }
+        if (m_testPatternTexture) {
+            obs_enter_graphics();
+            gs_texture_destroy(m_testPatternTexture);
+            obs_leave_graphics();
+            m_testPatternTexture = nullptr;
+        }
+    }
     m_pausedSourceRuntimes.clear();
+}
+
+QWidget* ObsDualMediaTestWindow::createTripleDeck(QWidget* parent) {
+    auto* deck = new QWidget(parent);
+    deck->setObjectName(QStringLiteral("tripleDeck"));
+    deck->setStyleSheet(QStringLiteral(
+        "#tripleDeck { background: #182026; border: 1px solid #384955; }"
+        "QPushButton { min-height: 24px; padding: 1px 6px; font-size: 11px; }"
+        "QComboBox { min-height: 24px; font-size: 11px; }"));
+    auto* deckLayout = new QVBoxLayout(deck);
+    deckLayout->setContentsMargins(8, 6, 8, 6);
+    deckLayout->setSpacing(6);
+
+    auto* topBar = new QHBoxLayout();
+    topBar->setContentsMargins(0, 0, 0, 0);
+    topBar->setSpacing(8);
+    auto* deckTitle = new QLabel(QStringLiteral("3-ZONE COMPOSITE DECK"), deck);
+    bindLocalizedProperty(deckTitle, "text", "BẢNG ĐIỀU KHIỂN 3 VÙNG ĐỘC LẬP (SEAMLESS CUT)", "3-ZONE INDEPENDENT DECK (SEAMLESS CUT)");
+    deckTitle->setStyleSheet(QStringLiteral("color: #7ee3f2; font-weight: bold; font-size: 11px; border: 0;"));
+    topBar->addWidget(deckTitle);
+    topBar->addStretch();
+
+    m_tripleConfigButton = new QPushButton(QStringLiteral("Canvas & Zones..."), deck);
+    bindLocalizedProperty(m_tripleConfigButton, "text", "⚙ Cấu hình tọa độ 3 vùng...", "⚙ Configure 3-Zone Canvas...");
+    connect(m_tripleConfigButton, &QPushButton::clicked, this, &ObsDualMediaTestWindow::showTripleLayoutSettingsDialog);
+    topBar->addWidget(m_tripleConfigButton);
+
+    m_testPatternButton = new QPushButton(QStringLiteral("Test Pattern"), deck);
+    m_testPatternButton->setCheckable(true);
+    bindLocalizedProperty(m_testPatternButton, "text", "🏁 Test Pattern LED", "🏁 LED Test Pattern");
+    m_testPatternButton->setStyleSheet(QStringLiteral(
+        "QPushButton:checked { background: #1e7055; border: 1px solid #63eab9; font-weight: bold; }"));
+    connect(m_testPatternButton, &QPushButton::clicked, this, &ObsDualMediaTestWindow::toggleTestPattern);
+    topBar->addWidget(m_testPatternButton);
+
+    m_blackoutAllButton = new QPushButton(QStringLiteral("BLACKOUT ALL"), deck);
+    m_blackoutAllButton->setCheckable(true);
+    bindLocalizedProperty(m_blackoutAllButton, "text", "⬛ BLACKOUT TOÀN BỘ", "⬛ BLACKOUT ALL");
+    m_blackoutAllButton->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #4a232b; border: 1px solid #8a4452; font-weight: bold; }"
+        "QPushButton:checked { background: #c9263d; border: 1px solid #ff99a8; color: #ffffff; }"));
+    connect(m_blackoutAllButton, &QPushButton::toggled, this, &ObsDualMediaTestWindow::toggleBlackoutAll);
+    topBar->addWidget(m_blackoutAllButton);
+    deckLayout->addLayout(topBar);
+
+    auto* cardsRow = new QHBoxLayout();
+    cardsRow->setContentsMargins(0, 0, 0, 0);
+    cardsRow->setSpacing(8);
+    const char* zoneTitleVi[3] = {"VÙNG 1 — CÁNH TRÁI (LEFT)", "VÙNG 2 — MÀN CHÍNH (MAIN)", "VÙNG 3 — CÁNH PHẢI (RIGHT)"};
+    const char* zoneTitleEn[3] = {"ZONE 1 — LEFT WING", "ZONE 2 — MAIN SCREEN", "ZONE 3 — RIGHT WING"};
+    for (int z = 0; z < 3; ++z) {
+        auto& zone = m_tripleZones[static_cast<size_t>(z)];
+        auto* card = new QWidget(deck);
+        zone.cardWidget = card;
+        card->setObjectName(QStringLiteral("zoneCard"));
+        auto* cardLayout = new QVBoxLayout(card);
+        cardLayout->setContentsMargins(6, 5, 6, 5);
+        cardLayout->setSpacing(4);
+
+        auto* headerRow = new QHBoxLayout();
+        headerRow->setSpacing(4);
+        zone.targetButton = new QPushButton(QString::fromUtf8(zoneTitleVi[z]), card);
+        zone.targetButton->setCheckable(true);
+        zone.targetButton->setChecked(z == m_activeZoneIndex);
+        bindLocalizedProperty(zone.targetButton, "text", zoneTitleVi[z], zoneTitleEn[z]);
+        zone.targetButton->setStyleSheet(QStringLiteral(
+            "QPushButton { text-align: left; font-weight: bold; background: #222d36; border: 1px solid #425563; }"
+            "QPushButton:checked { background: #1a5c73; border: 1px solid #5ad4f0; color: #ffffff; }"));
+        connect(zone.targetButton, &QPushButton::clicked, this, [this, z] { selectActiveZone(z); });
+        headerRow->addWidget(zone.targetButton, 1);
+
+        zone.statusBadge = new QLabel(QStringLiteral("IDLE"), card);
+        zone.statusBadge->setAlignment(Qt::AlignCenter);
+        zone.statusBadge->setFixedWidth(68);
+        zone.statusBadge->setStyleSheet(QStringLiteral(
+            "background: #2b353d; color: #b8c4ce; font-size: 10px; font-weight: bold; border-radius: 2px; padding: 2px;"));
+        headerRow->addWidget(zone.statusBadge);
+
+        zone.takeButton = new QPushButton(QStringLiteral("TAKE PVW"), card);
+        bindLocalizedProperty(zone.takeButton, "text", "ĐƯA PVW LÊN", "TAKE PVW");
+        zone.takeButton->setStyleSheet(QStringLiteral(
+            "QPushButton { background: #1c6b4a; border: 1px solid #52c794; font-weight: bold; }"
+            "QPushButton:hover { background: #24875e; }"));
+        connect(zone.takeButton, &QPushButton::clicked, this, [this, z] {
+            selectActiveZone(z);
+            promotePreviewToZone(z, "CUT");
+        });
+        headerRow->addWidget(zone.takeButton);
+        cardLayout->addLayout(headerRow);
+
+        zone.infoLabel = new QLabel(card);
+        zone.infoLabel->setStyleSheet(QStringLiteral("color: #d6e4ec; font-size: 11px; border: 0;"));
+        cardLayout->addWidget(zone.infoLabel);
+
+        auto* transportRow = new QHBoxLayout();
+        transportRow->setSpacing(4);
+        zone.playPauseButton = new QPushButton(card);
+        zone.playPauseButton->setFixedSize(28, 24);
+        zone.playPauseButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+        connect(zone.playPauseButton, &QPushButton::clicked, this, [this, z] { toggleZonePlayback(z); });
+        transportRow->addWidget(zone.playPauseButton);
+
+        zone.resetButton = new QPushButton(card);
+        zone.resetButton->setFixedSize(28, 24);
+        zone.resetButton->setIcon(style()->standardIcon(QStyle::SP_MediaSkipBackward));
+        connect(zone.resetButton, &QPushButton::clicked, this, [this, z] { resetZone(z); });
+        transportRow->addWidget(zone.resetButton);
+
+        zone.loopButton = new QPushButton(card);
+        zone.loopButton->setFixedSize(28, 24);
+        zone.loopButton->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+        zone.loopButton->setProperty("loopActive", zone.looping);
+        connect(zone.loopButton, &QPushButton::clicked, this, [this, z] { toggleZoneLoop(z); });
+        transportRow->addWidget(zone.loopButton);
+
+        zone.seekSlider = new QSlider(Qt::Horizontal, card);
+        zone.seekSlider->setRange(0, 1000);
+        connect(zone.seekSlider, &QSlider::sliderPressed, this, [this, z] {
+            m_tripleZones[static_cast<size_t>(z)].sliderDragging = true;
+        });
+        connect(zone.seekSlider, &QSlider::sliderReleased, this, [this, z] {
+            auto& zn = m_tripleZones[static_cast<size_t>(z)];
+            zn.sliderDragging = false;
+            if (zn.activeBackend && zn.activeBackend->isOpen() && zn.activeBackend->supportsTransport()) {
+                const int64_t dur = zn.activeBackend->durationMs();
+                if (dur > 0) zn.activeBackend->seekMs(dur * zn.seekSlider->value() / 1000);
+            }
+        });
+        transportRow->addWidget(zone.seekSlider, 1);
+
+        zone.timeLabel = new QLabel(QStringLiteral("00:00 / --:--"), card);
+        zone.timeLabel->setFixedWidth(96);
+        zone.timeLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        zone.timeLabel->setStyleSheet(QStringLiteral("color: #9de4f2; font-family: Consolas; font-size: 10px; font-weight: bold; border: 0;"));
+        transportRow->addWidget(zone.timeLabel);
+
+        zone.fitCombo = new QComboBox(card);
+        zone.fitCombo->addItem(QStringLiteral("Fit"), static_cast<int>(ObsRenderMode::AspectFit));
+        zone.fitCombo->addItem(QStringLiteral("Fill"), static_cast<int>(ObsRenderMode::AspectFill));
+        zone.fitCombo->addItem(QStringLiteral("Stretch"), static_cast<int>(ObsRenderMode::FitToScreen));
+        connect(zone.fitCombo, &QComboBox::currentIndexChanged, this, [this, z](int idx) { setZoneFitMode(z, idx); });
+        transportRow->addWidget(zone.fitCombo);
+
+        zone.muteButton = new QPushButton(card);
+        zone.muteButton->setFixedSize(28, 24);
+        zone.muteButton->setIcon(style()->standardIcon(zone.audioMuted ? QStyle::SP_MediaVolumeMuted : QStyle::SP_MediaVolume));
+        connect(zone.muteButton, &QPushButton::clicked, this, [this, z] { toggleZoneAudioMaster(z); });
+        transportRow->addWidget(zone.muteButton);
+
+        zone.blackoutButton = new QPushButton(QStringLiteral("BLK"), card);
+        zone.blackoutButton->setCheckable(true);
+        zone.blackoutButton->setFixedWidth(38);
+        zone.blackoutButton->setStyleSheet(QStringLiteral(
+            "QPushButton:checked { background: #b8253a; border: 1px solid #ff8c9c; color: #fff; font-weight: bold; }"));
+        connect(zone.blackoutButton, &QPushButton::toggled, this, [this, z](bool) { toggleZoneBlackout(z); });
+        transportRow->addWidget(zone.blackoutButton);
+
+        cardLayout->addLayout(transportRow);
+        cardsRow->addWidget(card, 1);
+    }
+    deckLayout->addLayout(cardsRow);
+    return deck;
+}
+
+void ObsDualMediaTestWindow::renderProgramCanvas(uint32_t width, uint32_t height, bool mapCanvasToSurface) {
+    if (width == 0 || height == 0) return;
+    const vec4 black{};
+    gs_clear(GS_CLEAR_COLOR, &black, 0.0f, 0);
+    if (m_blackoutAll.load()) return;
+
+    std::lock_guard<std::mutex> lock(m_tripleRenderMutex);
+    const int canvasW = std::max(1, m_canvasWidth);
+    const int canvasH = std::max(1, m_canvasHeight);
+
+    float scale = 1.0f;
+    int baseOffsetX = 0;
+    int baseOffsetY = 0;
+    if (mapCanvasToSurface) {
+        scale = std::min(static_cast<float>(width) / static_cast<float>(canvasW),
+                         static_cast<float>(height) / static_cast<float>(canvasH));
+        baseOffsetX = static_cast<int>((static_cast<float>(width) - static_cast<float>(canvasW) * scale) * 0.5f);
+        baseOffsetY = static_cast<int>((static_cast<float>(height) - static_cast<float>(canvasH) * scale) * 0.5f);
+    }
+
+    if (m_testPatternActive.load()) {
+        if (m_testPatternDirty.exchange(false) || !m_testPatternTexture) {
+            rebuildTestPatternImage();
+            if (m_testPatternTexture) {
+                gs_texture_destroy(m_testPatternTexture);
+                m_testPatternTexture = nullptr;
+            }
+            if (!m_testPatternImage.isNull()) {
+                const uint8_t* bits = m_testPatternImage.constBits();
+                m_testPatternTexture = gs_texture_create(
+                    static_cast<uint32_t>(m_testPatternImage.width()),
+                    static_cast<uint32_t>(m_testPatternImage.height()),
+                    GS_BGRA, 1, &bits, 0);
+            }
+        }
+        if (m_testPatternTexture) {
+            const uint32_t dstW = mapCanvasToSurface
+                ? static_cast<uint32_t>(std::max(1.0f, static_cast<float>(canvasW) * scale))
+                : static_cast<uint32_t>(canvasW);
+            const uint32_t dstH = mapCanvasToSurface
+                ? static_cast<uint32_t>(std::max(1.0f, static_cast<float>(canvasH) * scale))
+                : static_cast<uint32_t>(canvasH);
+            gs_viewport_push();
+            gs_projection_push();
+            gs_matrix_push();
+            gs_set_viewport(baseOffsetX, baseOffsetY, static_cast<int>(dstW), static_cast<int>(dstH));
+            gs_ortho(0.0f, static_cast<float>(dstW), 0.0f, static_cast<float>(dstH), -100.0f, 100.0f);
+            gs_matrix_identity();
+            gs_effect_t* effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+            if (effect) {
+                gs_eparam_t* imageParam = gs_effect_get_param_by_name(effect, "image");
+                gs_effect_set_texture(imageParam, m_testPatternTexture);
+                while (gs_effect_loop(effect, "Draw")) {
+                    gs_draw_sprite(m_testPatternTexture, 0, dstW, dstH);
+                }
+            }
+            gs_matrix_pop();
+            gs_projection_pop();
+            gs_viewport_pop();
+            return;
+        }
+    }
+
+    for (const auto& zone : m_tripleZones) {
+        if (zone.blackout || !zone.activeBackend || !zone.activeBackend->isOpen()) continue;
+        const int zx = baseOffsetX + static_cast<int>(std::round(static_cast<float>(zone.x) * scale));
+        const int zy = baseOffsetY + static_cast<int>(std::round(static_cast<float>(zone.y) * scale));
+        const uint32_t zw = static_cast<uint32_t>(std::max(1.0f, std::round(static_cast<float>(zone.width) * scale)));
+        const uint32_t zh = static_cast<uint32_t>(std::max(1.0f, std::round(static_cast<float>(zone.height) * scale)));
+        zone.activeBackend->renderRect(zx, zy, zw, zh);
+    }
+}
+
+void ObsDualMediaTestWindow::setLayoutMode(LayoutMode mode) {
+    if (m_fadeActive) {
+        if (m_layoutModeSelector) {
+            const QSignalBlocker blocker(m_layoutModeSelector);
+            m_layoutModeSelector->setCurrentIndex(m_layoutMode == LayoutMode::Triple ? 1 : 0);
+        }
+        return;
+    }
+    if (m_layoutMode == mode) {
+        if (m_tripleDeckWidget && (m_tripleDeckWidget->isHidden() != (mode == LayoutMode::Single))) {
+            m_tripleDeckWidget->setVisible(mode == LayoutMode::Triple);
+        }
+        return;
+    }
+    if (m_playlistMode) stopPlaylist();
+
+    m_layoutMode = mode;
+    if (m_layoutModeSelector) {
+        const QSignalBlocker blocker(m_layoutModeSelector);
+        m_layoutModeSelector->setCurrentIndex(mode == LayoutMode::Triple ? 1 : 0);
+    }
+    if (m_zoneSelectorContainer) m_zoneSelectorContainer->setVisible(mode == LayoutMode::Triple);
+    if (m_tripleDeckWidget) m_tripleDeckWidget->setVisible(mode == LayoutMode::Triple);
+    if (m_fadeButton) m_fadeButton->setVisible(mode == LayoutMode::Single);
+    if (m_fadeDuration) m_fadeDuration->setVisible(mode == LayoutMode::Single);
+    if (m_openPlaylistButton) m_openPlaylistButton->setVisible(mode == LayoutMode::Single);
+    if (m_playlistPreviousButton) m_playlistPreviousButton->setVisible(mode == LayoutMode::Single);
+    if (m_playlistNextButton) m_playlistNextButton->setVisible(mode == LayoutMode::Single);
+
+    if (mode == LayoutMode::Triple) {
+        if (m_program.backend && m_program.backend->isOpen()) {
+            m_program.backend->setAudioOutputEnabled(false);
+            if (m_program.backend->supportsTransport()) m_program.backend->pause();
+        }
+        m_pausedSourceRuntimes.clear();
+
+        uint64_t fallbackBlankId = 0;
+        if (m_sourceCatalog) {
+            for (const auto& src : m_sourceCatalog->sources()) {
+                if (src.systemSource && src.type == ObsCatalogSourceType::ColorBlank) {
+                    fallbackBlankId = src.id;
+                    break;
+                }
+            }
+        }
+
+        for (size_t z = 0; z < 3; ++z) {
+            auto& zone = m_tripleZones[z];
+            if (!zone.activeBackend) zone.activeBackend = std::make_unique<ObsPlaybackBackend>(m_context);
+            zone.activeBackend->setRenderMode(zone.renderMode);
+            zone.activeBackend->setVolume((m_program.audioMuted || zone.audioMuted) ? 0.0f : m_program.volume);
+            zone.activeBackend->setAudioOutputEnabled(!zone.audioMuted);
+            zone.activeBackend->setLooping(zone.looping);
+
+            const uint64_t targetId = (zone.sourceId != 0 && m_sourceCatalog && m_sourceCatalog->find(zone.sourceId))
+                ? zone.sourceId : fallbackBlankId;
+            if (targetId != 0 && !zone.activeBackend->isOpen()) {
+                if (const auto src = m_sourceCatalog->find(targetId)) {
+                    if (zone.activeBackend->open(*src, false)) {
+                        zone.sourceId = targetId;
+                        if (const auto snap = m_lastProgramSnapshots.find(targetId);
+                            snap != m_lastProgramSnapshots.end() && snap->second.positionMs > 0 &&
+                            zone.activeBackend->supportsTransport()) {
+                            zone.activeBackend->seekMs(snap->second.positionMs);
+                        }
+                        if (zone.activeBackend->supportsTransport()) zone.activeBackend->play();
+                    }
+                }
+            }
+        }
+        initializeDisplay(m_program);
+        selectActiveZone(m_activeZoneIndex);
+        updateTripleZonesUi();
+        LOG_INFO("OBS layout: switched to 3-Zone mode (canvas={}x{}).", m_canvasWidth, m_canvasHeight);
+    } else {
+        m_testPatternActive.store(false);
+        if (m_testPatternButton) {
+            const QSignalBlocker blocker(m_testPatternButton);
+            m_testPatternButton->setChecked(false);
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_tripleRenderMutex);
+            for (auto& zone : m_tripleZones) {
+                if (zone.activeBackend && zone.activeBackend->isOpen() && zone.sourceId != 0) {
+                    PlaybackSnapshot snap;
+                    snap.sourceId = zone.sourceId;
+                    snap.positionMs = zone.activeBackend->positionMs();
+                    snap.durationMs = zone.activeBackend->durationMs();
+                    snap.looping = zone.activeBackend->isLooping();
+                    snap.valid = true;
+                    rememberProgramSnapshot(snap);
+                }
+                if (zone.activeBackend) zone.activeBackend->close();
+                if (zone.pendingBackend) zone.pendingBackend->close();
+                zone.activeBackend.reset();
+                zone.pendingBackend.reset();
+                zone.pendingSourceId = 0;
+            }
+        }
+        if (m_program.backend) {
+            if (!m_program.backend->isOpen() && m_programSourceId != 0) {
+                openCatalogSource(*m_program.backend, m_programSourceId, false);
+            }
+            m_program.backend->setAudioOutputEnabled(true);
+            m_program.backend->setVolume(m_program.audioMuted ? 0.0f : m_program.volume);
+            if (m_program.backend->supportsTransport()) m_program.backend->play();
+            initializeDisplay(m_program);
+        }
+        LOG_INFO("OBS layout: switched to Single-Zone mode.");
+    }
+    refreshCatalogUi();
+    updateMonitorLayout();
+}
+
+void ObsDualMediaTestWindow::selectActiveZone(int zoneIndex) {
+    m_activeZoneIndex = std::clamp(zoneIndex, 0, 2);
+    for (int z = 0; z < 3; ++z) {
+        if (m_railZoneButtons[static_cast<size_t>(z)]) {
+            const QSignalBlocker blocker(m_railZoneButtons[static_cast<size_t>(z)]);
+            m_railZoneButtons[static_cast<size_t>(z)]->setChecked(z == m_activeZoneIndex);
+        }
+        if (m_tripleZones[static_cast<size_t>(z)].targetButton) {
+            const QSignalBlocker blocker(m_tripleZones[static_cast<size_t>(z)].targetButton);
+            m_tripleZones[static_cast<size_t>(z)].targetButton->setChecked(z == m_activeZoneIndex);
+        }
+        if (m_tripleZones[static_cast<size_t>(z)].cardWidget) {
+            m_tripleZones[static_cast<size_t>(z)].cardWidget->setStyleSheet(
+                z == m_activeZoneIndex
+                    ? QStringLiteral("#zoneCard { background: #1e2933; border: 2px solid #49c5e0; border-radius: 3px; }")
+                    : QStringLiteral("#zoneCard { background: #141b21; border: 1px solid #32404b; border-radius: 3px; }"));
+        }
+    }
+    updateTripleZonesUi();
+}
+
+bool ObsDualMediaTestWindow::promotePreviewToZone(int zoneIndex, const char* operation) {
+    if (zoneIndex < 0 || zoneIndex >= 3) return false;
+    const PlaybackSnapshot incoming = capturePreviewSnapshot();
+    if (!incoming.valid || !m_sourceCatalog) return false;
+    const auto source = m_sourceCatalog->find(incoming.sourceId);
+    if (!source) return false;
+
+    auto& zone = m_tripleZones[static_cast<size_t>(zoneIndex)];
+    const bool incomingTransportStarted = m_previewTransportStarted;
+
+    // Fast path: PVW already owns a warmed-up decoder for this exact source.
+    if (m_preview.backend && m_preview.backend->isOpen() && m_previewSourceId == incoming.sourceId) {
+        if (!incomingTransportStarted && m_preview.backend->supportsTransport()) {
+            m_preview.backend->pause();
+            if (!m_previewRuntimeMatchesStagedFrame) m_preview.backend->seekMs(incoming.positionMs);
+        }
+        obs_source_t* src = m_preview.backend->nativeSource();
+        const uint32_t sw = src ? std::max(obs_source_get_width(src), obs_source_get_base_width(src)) : 0;
+        const uint32_t sh = src ? std::max(obs_source_get_height(src), obs_source_get_base_height(src)) : 0;
+        const bool frameReady = sw > 0 && sh > 0;
+        if (frameReady || source->type == ObsCatalogSourceType::AudioFile || source->type == ObsCatalogSourceType::ColorBlank) {
+            destroyDisplay(m_preview);
+            auto incomingRuntime = std::move(m_preview.backend);
+            m_preview.backend = std::make_unique<ObsPlaybackBackend>(m_context);
+            m_preview.backend->setAudioOutputEnabled(false);
+            m_preview.backend->setVolume(m_preview.audioMuted ? 0.0f : m_preview.volume);
+            m_previewTransportStarted = false;
+            m_previewRuntimeMatchesStagedFrame = false;
+
+            incomingRuntime->setRenderMode(zone.renderMode);
+            incomingRuntime->setLooping(incoming.looping);
+            incomingRuntime->setVolume((m_program.audioMuted || zone.audioMuted) ? 0.0f : m_program.volume);
+            incomingRuntime->setAudioOutputEnabled(!zone.audioMuted);
+            if (incomingRuntime->supportsTransport()) incomingRuntime->play();
+
+            std::unique_ptr<ObsPlaybackBackend> outgoingRuntime;
+            uint64_t outgoingSourceId = 0;
+            {
+                std::lock_guard<std::mutex> lock(m_tripleRenderMutex);
+                if (zone.pendingBackend) zone.pendingBackend->close();
+                zone.pendingBackend.reset();
+                zone.pendingSourceId = 0;
+                outgoingRuntime = std::move(zone.activeBackend);
+                outgoingSourceId = zone.sourceId;
+                zone.activeBackend = std::move(incomingRuntime);
+                zone.sourceId = incoming.sourceId;
+                zone.looping = incoming.looping;
+            }
+
+            if (outgoingRuntime && outgoingRuntime->isOpen()) {
+                if (outgoingRuntime->supportsTransport()) outgoingRuntime->pause();
+                PlaybackSnapshot outSnap;
+                outSnap.sourceId = outgoingSourceId;
+                outSnap.positionMs = outgoingRuntime->positionMs();
+                outSnap.durationMs = outgoingRuntime->durationMs();
+                outSnap.looping = outgoingRuntime->isLooping();
+                outSnap.valid = isCatalogSourceAvailable(outgoingSourceId);
+                rememberProgramSnapshot(outSnap);
+                const QImage still = captureBackendStill(*outgoingRuntime);
+                if (!still.isNull()) showSourceThumbnail(outgoingSourceId, still, outSnap, true);
+                outgoingRuntime->setAudioOutputEnabled(false);
+                outgoingRuntime->close();
+            }
+
+            stagePreviewSnapshot(incoming);
+            updateTripleZonesUi();
+            refreshCatalogUi();
+            LOG_INFO("OBS 3-zone: {} seamlessly swapped warmed PVW runtime into Zone #{} (source #{}, {} ms).",
+                     operation, zoneIndex + 1, incoming.sourceId, incoming.positionMs);
+            return true;
+        }
+    }
+
+    // Double-buffered background warmup: keep current activeBackend rendering on LED without any black gap.
+    auto pending = std::make_unique<ObsPlaybackBackend>(m_context);
+    pending->setRenderMode(zone.renderMode);
+    pending->setLooping(incoming.looping);
+    pending->setVolume((m_program.audioMuted || zone.audioMuted) ? 0.0f : m_program.volume);
+    pending->setAudioOutputEnabled(false);
+    if (!pending->open(*source, false)) {
+        LOG_ERROR("OBS 3-zone: failed to open pending source #{} for Zone #{}.", incoming.sourceId, zoneIndex + 1);
+        return false;
+    }
+    if (pending->supportsTransport() && incoming.positionMs > 0) {
+        pending->seekMs(incoming.positionMs);
+    }
+    if (pending->supportsTransport()) pending->play();
+
+    {
+        std::lock_guard<std::mutex> lock(m_tripleRenderMutex);
+        if (zone.pendingBackend) zone.pendingBackend->close();
+        zone.pendingBackend = std::move(pending);
+        zone.pendingSourceId = incoming.sourceId;
+        zone.pendingPositionMs = incoming.positionMs;
+        zone.pendingLooping = incoming.looping;
+    }
+    commitPendingZoneSwaps();
+    updateTripleZonesUi();
+    LOG_INFO("OBS 3-zone: {} queued seamless background preload for Zone #{} (source #{}).",
+             operation, zoneIndex + 1, incoming.sourceId);
+    return true;
+}
+
+void ObsDualMediaTestWindow::commitPendingZoneSwaps() {
+    for (int z = 0; z < 3; ++z) {
+        auto& zone = m_tripleZones[static_cast<size_t>(z)];
+        if (!zone.pendingBackend || !zone.pendingBackend->isOpen()) continue;
+
+        obs_source_t* src = zone.pendingBackend->nativeSource();
+        const auto catSource = m_sourceCatalog ? m_sourceCatalog->find(zone.pendingSourceId) : std::nullopt;
+        const bool isAudioOrBlank = catSource &&
+            (catSource->type == ObsCatalogSourceType::AudioFile || catSource->type == ObsCatalogSourceType::ColorBlank);
+        const uint32_t sw = src ? std::max(obs_source_get_width(src), obs_source_get_base_width(src)) : 0;
+        const uint32_t sh = src ? std::max(obs_source_get_height(src), obs_source_get_base_height(src)) : 0;
+        const bool videoReady = sw > 0 && sh > 0 &&
+            zone.pendingBackend->state() != ObsPlaybackState::Opening;
+        if (!isAudioOrBlank && !videoReady) continue;
+
+        std::unique_ptr<ObsPlaybackBackend> outgoingRuntime;
+        uint64_t outgoingSourceId = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_tripleRenderMutex);
+            outgoingRuntime = std::move(zone.activeBackend);
+            outgoingSourceId = zone.sourceId;
+            zone.activeBackend = std::move(zone.pendingBackend);
+            zone.sourceId = zone.pendingSourceId;
+            zone.looping = zone.pendingLooping;
+            zone.pendingSourceId = 0;
+        }
+        zone.activeBackend->setAudioOutputEnabled(!zone.audioMuted);
+        zone.activeBackend->setVolume((m_program.audioMuted || zone.audioMuted) ? 0.0f : m_program.volume);
+        if (zone.activeBackend->supportsTransport()) zone.activeBackend->play();
+
+        if (outgoingRuntime && outgoingRuntime->isOpen()) {
+            if (outgoingRuntime->supportsTransport()) outgoingRuntime->pause();
+            PlaybackSnapshot outSnap;
+            outSnap.sourceId = outgoingSourceId;
+            outSnap.positionMs = outgoingRuntime->positionMs();
+            outSnap.durationMs = outgoingRuntime->durationMs();
+            outSnap.looping = outgoingRuntime->isLooping();
+            outSnap.valid = isCatalogSourceAvailable(outgoingSourceId);
+            rememberProgramSnapshot(outSnap);
+            outgoingRuntime->setAudioOutputEnabled(false);
+            outgoingRuntime->close();
+        }
+        refreshCatalogUi();
+        LOG_INFO("OBS 3-zone: committed seamless swap on Zone #{} to source #{}.", z + 1, zone.sourceId);
+    }
+}
+
+void ObsDualMediaTestWindow::updateTripleZonesUi() {
+    if (m_layoutMode != LayoutMode::Triple) return;
+
+    const char* zoneShortVi[3] = {"TRÁI", "CHÍNH", "PHẢI"};
+    const char* zoneShortEn[3] = {"LEFT", "MAIN", "RIGHT"};
+    const QString activeZoneName = localized(zoneShortVi[m_activeZoneIndex], zoneShortEn[m_activeZoneIndex]);
+    if (m_program.sourceLabel) {
+        m_program.sourceLabel->setText(
+            localized("PGM 3 VÙNG (%1×%2) — Đích TAKE: [%3]%4",
+                      "3-ZONE PGM (%1×%2) — Target: [%3]%4")
+                .arg(m_canvasWidth).arg(m_canvasHeight)
+                .arg(activeZoneName)
+                .arg(m_blackoutAll.load() ? QStringLiteral(" [BLACKOUT ALL]") : QString{}));
+    }
+
+    for (int z = 0; z < 3; ++z) {
+        auto& zone = m_tripleZones[static_cast<size_t>(z)];
+        const auto src = m_sourceCatalog ? m_sourceCatalog->find(zone.sourceId) : std::nullopt;
+        const QString srcName = src ? catalogSourceName(*src, m_language == UiLanguage::Vietnamese)
+                                    : localized("Chưa có nguồn", "Empty");
+        if (zone.infoLabel) {
+            zone.infoLabel->setText(QStringLiteral("[%1,%2  %3×%4]  %5")
+                .arg(zone.x).arg(zone.y).arg(zone.width).arg(zone.height).arg(srcName));
+        }
+
+        const bool hasBackend = zone.activeBackend && zone.activeBackend->isOpen();
+        const ObsPlaybackState st = hasBackend ? zone.activeBackend->state() : ObsPlaybackState::None;
+        const bool isPending = zone.pendingBackend && zone.pendingBackend->isOpen();
+
+        if (zone.statusBadge) {
+            if (m_blackoutAll.load() || zone.blackout) {
+                zone.statusBadge->setText(QStringLiteral("BLACKOUT"));
+                zone.statusBadge->setStyleSheet(QStringLiteral("background: #111; color: #ff6e80; font-size: 10px; font-weight: bold; border: 1px solid #ff6e80; border-radius: 2px;"));
+            } else if (isPending) {
+                zone.statusBadge->setText(localized("NẠP...", "CUEING"));
+                zone.statusBadge->setStyleSheet(QStringLiteral("background: #6e551c; color: #ffe28a; font-size: 10px; font-weight: bold; border-radius: 2px;"));
+            } else if (st == ObsPlaybackState::Error) {
+                zone.statusBadge->setText(localized("LỖI", "ERROR"));
+                zone.statusBadge->setStyleSheet(QStringLiteral("background: #7a2030; color: #ffb3be; font-size: 10px; font-weight: bold; border-radius: 2px;"));
+            } else if (st == ObsPlaybackState::Playing) {
+                zone.statusBadge->setText(QStringLiteral("PLAYING"));
+                zone.statusBadge->setStyleSheet(QStringLiteral("background: #196b43; color: #9ef7c6; font-size: 10px; font-weight: bold; border-radius: 2px;"));
+            } else if (st == ObsPlaybackState::Paused || st == ObsPlaybackState::Buffering || st == ObsPlaybackState::Opening) {
+                zone.statusBadge->setText(QStringLiteral("PAUSED"));
+                zone.statusBadge->setStyleSheet(QStringLiteral("background: #6e551c; color: #ffe28a; font-size: 10px; font-weight: bold; border-radius: 2px;"));
+            } else if (hasBackend) {
+                zone.statusBadge->setText(QStringLiteral("LIVE"));
+                zone.statusBadge->setStyleSheet(QStringLiteral("background: #196b43; color: #9ef7c6; font-size: 10px; font-weight: bold; border-radius: 2px;"));
+            } else {
+                zone.statusBadge->setText(QStringLiteral("EMPTY"));
+                zone.statusBadge->setStyleSheet(QStringLiteral("background: #2b353d; color: #9aa7b0; font-size: 10px; font-weight: bold; border-radius: 2px;"));
+            }
+        }
+
+        const bool supportsTrans = hasBackend && zone.activeBackend->supportsTransport();
+        const int64_t pos = supportsTrans ? zone.activeBackend->positionMs() : 0;
+        const int64_t dur = supportsTrans ? zone.activeBackend->durationMs() : 0;
+        if (zone.seekSlider) {
+            zone.seekSlider->setEnabled(supportsTrans && dur > 0);
+            if (!zone.sliderDragging && supportsTrans && dur > 0) {
+                zone.seekSlider->setValue(static_cast<int>(pos * 1000 / dur));
+            }
+        }
+        if (zone.playPauseButton) {
+            zone.playPauseButton->setEnabled(supportsTrans);
+            zone.playPauseButton->setIcon(style()->standardIcon(
+                st == ObsPlaybackState::Playing ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
+        }
+        if (zone.resetButton) zone.resetButton->setEnabled(supportsTrans);
+        if (zone.loopButton) {
+            zone.loopButton->setEnabled(supportsTrans);
+            const bool lp = hasBackend ? zone.activeBackend->isLooping() : zone.looping;
+            zone.loopButton->setProperty("loopActive", lp);
+            zone.loopButton->style()->unpolish(zone.loopButton);
+            zone.loopButton->style()->polish(zone.loopButton);
+        }
+        if (zone.timeLabel) {
+            zone.timeLabel->setText(supportsTrans ? formatTimeline(pos, dur)
+                : (hasBackend && zone.activeBackend->isLiveInput() ? QStringLiteral("LIVE") : QStringLiteral("STILL")));
+        }
+        if (zone.muteButton) {
+            zone.muteButton->setIcon(style()->standardIcon(
+                zone.audioMuted ? QStyle::SP_MediaVolumeMuted : QStyle::SP_MediaVolume));
+            zone.muteButton->setStyleSheet(zone.audioMuted
+                ? QStringLiteral("QPushButton { background: #26313a; }")
+                : QStringLiteral("QPushButton { background: #1b6b85; border: 1px solid #63d2ee; }"));
+        }
+    }
+}
+
+void ObsDualMediaTestWindow::showTripleLayoutSettingsDialog() {
+    QDialog dialog(this);
+    dialog.setWindowTitle(localized("Cấu hình Canvas & 3 vùng hiển thị LED", "Configure 3-Zone LED Canvas & Regions"));
+    dialog.resize(560, 380);
+    auto* layout = new QVBoxLayout(&dialog);
+
+    auto* presetRow = new QHBoxLayout();
+    auto* presetLabel = new QLabel(localized("Nhập nhanh (Trái | Chính | Phải):", "Quick Preset (Left | Main | Right):"), &dialog);
+    auto* leftWSpin = new QSpinBox(&dialog);
+    auto* mainWSpin = new QSpinBox(&dialog);
+    auto* rightWSpin = new QSpinBox(&dialog);
+    auto* commonHSpin = new QSpinBox(&dialog);
+    for (QSpinBox* sp : {leftWSpin, mainWSpin, rightWSpin, commonHSpin}) {
+        sp->setRange(16, 16384);
+    }
+    leftWSpin->setValue(m_tripleZones[0].width);
+    mainWSpin->setValue(m_tripleZones[1].width);
+    rightWSpin->setValue(m_tripleZones[2].width);
+    commonHSpin->setValue(m_canvasHeight);
+    auto* applyPresetBtn = new QPushButton(localized("Tự tính X/Y & Canvas", "Auto-calc X/Y & Canvas"), &dialog);
+    presetRow->addWidget(presetLabel);
+    presetRow->addWidget(leftWSpin);
+    presetRow->addWidget(mainWSpin);
+    presetRow->addWidget(rightWSpin);
+    presetRow->addWidget(new QLabel(QStringLiteral("× H:"), &dialog));
+    presetRow->addWidget(commonHSpin);
+    presetRow->addWidget(applyPresetBtn);
+    layout->addLayout(presetRow);
+
+    auto* canvasBox = new QGroupBox(localized("Kích thước Canvas tổng (Pixel)", "Total Canvas Resolution (Pixels)"), &dialog);
+    auto* canvasRow = new QHBoxLayout(canvasBox);
+    auto* canvasWSpin = new QSpinBox(canvasBox);
+    auto* canvasHSpin = new QSpinBox(canvasBox);
+    canvasWSpin->setRange(16, 16384);
+    canvasHSpin->setRange(16, 16384);
+    canvasWSpin->setValue(m_canvasWidth);
+    canvasHSpin->setValue(m_canvasHeight);
+    canvasRow->addWidget(new QLabel(localized("Rộng (Width):", "Width:"), canvasBox));
+    canvasRow->addWidget(canvasWSpin);
+    canvasRow->addWidget(new QLabel(localized("Cao (Height):", "Height:"), canvasBox));
+    canvasRow->addWidget(canvasHSpin);
+    layout->addWidget(canvasBox);
+
+    auto* zonesBox = new QGroupBox(localized("Tọa độ & Kích thước từng vùng tự do (X, Y, Rộng, Cao)", "Custom Zone Rectangles (X, Y, Width, Height)"), &dialog);
+    auto* zonesGrid = new QVBoxLayout(zonesBox);
+    QSpinBox* xSpins[3]{};
+    QSpinBox* ySpins[3]{};
+    QSpinBox* wSpins[3]{};
+    QSpinBox* hSpins[3]{};
+    const QString labels[3] = {
+        localized("Vùng 1 (Trái):", "Zone 1 (Left):"),
+        localized("Vùng 2 (Chính):", "Zone 2 (Main):"),
+        localized("Vùng 3 (Phải):", "Zone 3 (Right):"),
+    };
+    for (int z = 0; z < 3; ++z) {
+        auto* row = new QHBoxLayout();
+        auto* lbl = new QLabel(labels[z], zonesBox);
+        lbl->setFixedWidth(110);
+        row->addWidget(lbl);
+        xSpins[z] = new QSpinBox(zonesBox);
+        ySpins[z] = new QSpinBox(zonesBox);
+        wSpins[z] = new QSpinBox(zonesBox);
+        hSpins[z] = new QSpinBox(zonesBox);
+        xSpins[z]->setRange(0, 16384);
+        ySpins[z]->setRange(0, 16384);
+        wSpins[z]->setRange(16, 16384);
+        hSpins[z]->setRange(16, 16384);
+        xSpins[z]->setValue(m_tripleZones[static_cast<size_t>(z)].x);
+        ySpins[z]->setValue(m_tripleZones[static_cast<size_t>(z)].y);
+        wSpins[z]->setValue(m_tripleZones[static_cast<size_t>(z)].width);
+        hSpins[z]->setValue(m_tripleZones[static_cast<size_t>(z)].height);
+        row->addWidget(new QLabel(QStringLiteral("X:"), zonesBox));
+        row->addWidget(xSpins[z]);
+        row->addWidget(new QLabel(QStringLiteral("Y:"), zonesBox));
+        row->addWidget(ySpins[z]);
+        row->addWidget(new QLabel(QStringLiteral("W:"), zonesBox));
+        row->addWidget(wSpins[z]);
+        row->addWidget(new QLabel(QStringLiteral("H:"), zonesBox));
+        row->addWidget(hSpins[z]);
+        zonesGrid->addLayout(row);
+    }
+    layout->addWidget(zonesBox);
+
+    connect(applyPresetBtn, &QPushButton::clicked, &dialog, [&] {
+        const int lw = leftWSpin->value();
+        const int mw = mainWSpin->value();
+        const int rw = rightWSpin->value();
+        const int ch = commonHSpin->value();
+        canvasWSpin->setValue(lw + mw + rw);
+        canvasHSpin->setValue(ch);
+        xSpins[0]->setValue(0);        ySpins[0]->setValue(0); wSpins[0]->setValue(lw); hSpins[0]->setValue(ch);
+        xSpins[1]->setValue(lw);       ySpins[1]->setValue(0); wSpins[1]->setValue(mw); hSpins[1]->setValue(ch);
+        xSpins[2]->setValue(lw + mw);  ySpins[2]->setValue(0); wSpins[2]->setValue(rw); hSpins[2]->setValue(ch);
+    });
+
+    auto* buttons = new QHBoxLayout();
+    buttons->addStretch();
+    auto* okBtn = new QPushButton(localized("Áp dụng & Lưu", "Apply & Save"), &dialog);
+    auto* cancelBtn = new QPushButton(localized("Huỷ", "Cancel"), &dialog);
+    connect(okBtn, &QPushButton::clicked, &dialog, &QDialog::accept);
+    connect(cancelBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
+    buttons->addWidget(okBtn);
+    buttons->addWidget(cancelBtn);
+    layout->addLayout(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    {
+        std::lock_guard<std::mutex> lock(m_tripleRenderMutex);
+        m_canvasWidth = canvasWSpin->value();
+        m_canvasHeight = canvasHSpin->value();
+        for (int z = 0; z < 3; ++z) {
+            auto& zone = m_tripleZones[static_cast<size_t>(z)];
+            zone.x = xSpins[z]->value();
+            zone.y = ySpins[z]->value();
+            zone.width = wSpins[z]->value();
+            zone.height = hSpins[z]->value();
+        }
+        m_testPatternDirty.store(true);
+    }
+    updateTripleZonesUi();
+    saveWorkspace();
+    LOG_INFO("OBS 3-zone: updated canvas={}x{} and zone rectangles.", m_canvasWidth, m_canvasHeight);
+}
+
+void ObsDualMediaTestWindow::toggleTestPattern() {
+    const bool enabled = m_testPatternButton ? m_testPatternButton->isChecked() : !m_testPatternActive.load();
+    m_testPatternActive.store(enabled);
+    if (m_testPatternButton) {
+        const QSignalBlocker blocker(m_testPatternButton);
+        m_testPatternButton->setChecked(enabled);
+    }
+    m_testPatternDirty.store(true);
+    LOG_INFO("OBS 3-zone: LED Test Pattern {}.", enabled ? "ENABLED" : "DISABLED");
+}
+
+void ObsDualMediaTestWindow::rebuildTestPatternImage() {
+    const int cw = std::clamp(m_canvasWidth, 64, 8192);
+    const int ch = std::clamp(m_canvasHeight, 64, 8192);
+    QImage img(cw, ch, QImage::Format_ARGB32);
+    img.fill(QColor(12, 16, 20));
+
+    QPainter p(&img);
+    p.setRenderHint(QPainter::Antialiasing, false);
+
+    const QColor bgColors[3] = {QColor(22, 58, 92), QColor(28, 78, 54), QColor(88, 36, 62)};
+    const QColor borderColors[3] = {QColor(0, 225, 255), QColor(80, 255, 140), QColor(255, 110, 185)};
+    const QString names[3] = {QStringLiteral("LEFT (ZONE 1)"), QStringLiteral("MAIN (ZONE 2)"), QStringLiteral("RIGHT (ZONE 3)")};
+
+    for (int z = 0; z < 3; ++z) {
+        const auto& zone = m_tripleZones[static_cast<size_t>(z)];
+        const QRect r(zone.x, zone.y, zone.width, zone.height);
+        p.fillRect(r, bgColors[z]);
+
+        p.setPen(QPen(QColor(255, 255, 255, 38), 1));
+        for (int gx = r.left(); gx <= r.right(); gx += 64) p.drawLine(gx, r.top(), gx, r.bottom());
+        for (int gy = r.top(); gy <= r.bottom(); gy += 64) p.drawLine(r.left(), gy, r.right(), gy);
+
+        p.setPen(QPen(borderColors[z], 4));
+        p.drawRect(r.adjusted(2, 2, -2, -2));
+
+        const QPoint center = r.center();
+        p.setPen(QPen(Qt::yellow, 2));
+        p.drawLine(center.x() - 30, center.y(), center.x() + 30, center.y());
+        p.drawLine(center.x(), center.y() - 30, center.x(), center.y() + 30);
+
+        QFont font = p.font();
+        font.setPixelSize(std::clamp(zone.width / 14, 18, 56));
+        font.setBold(true);
+        p.setFont(font);
+        p.setPen(Qt::white);
+        const QString label = QStringLiteral("%1\nx=%2, y=%3\n%4 × %5 px")
+            .arg(names[z]).arg(zone.x).arg(zone.y).arg(zone.width).arg(zone.height);
+        p.drawText(r, Qt::AlignCenter, label);
+    }
+    p.end();
+    m_testPatternImage = std::move(img);
+}
+
+void ObsDualMediaTestWindow::toggleZonePlayback(int zoneIndex) {
+    if (zoneIndex < 0 || zoneIndex >= 3) return;
+    auto& zone = m_tripleZones[static_cast<size_t>(zoneIndex)];
+    if (!zone.activeBackend || !zone.activeBackend->isOpen() || !zone.activeBackend->supportsTransport()) return;
+    if (zone.activeBackend->state() == ObsPlaybackState::Playing) zone.activeBackend->pause();
+    else zone.activeBackend->play();
+    updateTripleZonesUi();
+}
+
+void ObsDualMediaTestWindow::toggleZoneLoop(int zoneIndex) {
+    if (zoneIndex < 0 || zoneIndex >= 3) return;
+    auto& zone = m_tripleZones[static_cast<size_t>(zoneIndex)];
+    zone.looping = !zone.looping;
+    if (zone.activeBackend && zone.activeBackend->isOpen()) {
+        zone.activeBackend->setLooping(zone.looping);
+    }
+    updateTripleZonesUi();
+}
+
+void ObsDualMediaTestWindow::resetZone(int zoneIndex) {
+    if (zoneIndex < 0 || zoneIndex >= 3) return;
+    auto& zone = m_tripleZones[static_cast<size_t>(zoneIndex)];
+    if (zone.activeBackend && zone.activeBackend->isOpen() && zone.activeBackend->supportsTransport()) {
+        zone.activeBackend->seekMs(0);
+    }
+    updateTripleZonesUi();
+}
+
+void ObsDualMediaTestWindow::setZoneFitMode(int zoneIndex, int comboIndex) {
+    if (zoneIndex < 0 || zoneIndex >= 3) return;
+    auto& zone = m_tripleZones[static_cast<size_t>(zoneIndex)];
+    if (!zone.fitCombo || comboIndex < 0) return;
+    zone.renderMode = static_cast<ObsRenderMode>(zone.fitCombo->itemData(comboIndex).toInt());
+    if (zone.activeBackend) zone.activeBackend->setRenderMode(zone.renderMode);
+    if (zone.pendingBackend) zone.pendingBackend->setRenderMode(zone.renderMode);
+    saveWorkspace();
+}
+
+void ObsDualMediaTestWindow::toggleZoneAudioMaster(int zoneIndex) {
+    if (zoneIndex < 0 || zoneIndex >= 3) return;
+    const bool currentlyMuted = m_tripleZones[static_cast<size_t>(zoneIndex)].audioMuted;
+    for (int z = 0; z < 3; ++z) {
+        auto& zone = m_tripleZones[static_cast<size_t>(z)];
+        zone.audioMuted = (z == zoneIndex) ? !currentlyMuted : true;
+        if (zone.activeBackend) {
+            zone.activeBackend->setAudioOutputEnabled(!zone.audioMuted);
+            zone.activeBackend->setVolume((m_program.audioMuted || zone.audioMuted) ? 0.0f : m_program.volume);
+        }
+    }
+    updateTripleZonesUi();
+    saveWorkspace();
+}
+
+void ObsDualMediaTestWindow::toggleZoneBlackout(int zoneIndex) {
+    if (zoneIndex < 0 || zoneIndex >= 3) return;
+    auto& zone = m_tripleZones[static_cast<size_t>(zoneIndex)];
+    zone.blackout = zone.blackoutButton ? zone.blackoutButton->isChecked() : !zone.blackout;
+    updateTripleZonesUi();
+}
+
+void ObsDualMediaTestWindow::toggleBlackoutAll(bool checked) {
+    m_blackoutAll.store(checked);
+    updateTripleZonesUi();
 }

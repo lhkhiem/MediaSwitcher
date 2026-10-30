@@ -7,13 +7,15 @@
 #define AppPublisher "Lê Khiêm"
 #define AppURL "https://lekhiem.io.vn"
 #define AppExeName "MediaSwitcher.exe"
+; Validated runtime baseline, also read by Build-Installer.ps1.
+#define MinimumVCRedistVersion "14.50.35719.0"
 
 #ifndef SourceRoot
   #define SourceRoot "..\build-obs\obs-runtime-stage"
 #endif
 
 #ifndef VCRedistPath
-  #define VCRedistPath ""
+  #error Use Build-Installer.ps1 to supply the required x64 Visual C++ Redistributable.
 #endif
 
 [Setup]
@@ -45,7 +47,7 @@ LicenseFile=..\COPYRIGHT
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-MinVersion=10.0
+MinVersion=10.0.17763
 CloseApplications=force
 RestartApplications=no
 ChangesAssociations=no
@@ -98,9 +100,9 @@ Source: "{#SourceRoot}\obs-plugins\64bit\*.dll"; DestDir: "{app}\obs-plugins\64b
 Source: "{#SourceRoot}\data\libobs\*"; DestDir: "{app}\data\libobs"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#SourceRoot}\data\obs-plugins\*"; DestDir: "{app}\data\obs-plugins"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-#if VCRedistPath != ""
-Source: "{#VCRedistPath}"; DestDir: "{tmp}"; DestName: "vc_redist.x64.exe"; Flags: deleteafterinstall
-#endif
+; Extract before installation so a failed prerequisite cannot look like success.
+Source: "{#VCRedistPath}"; DestDir: "{tmp}"; DestName: "vc_redist.x64.exe"; Flags: dontcopy
+Source: "..\tools\CollectStartupDiagnostics.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppFullName}"; Filename: "{app}\bin\64bit\{#AppExeName}"; WorkingDir: "{app}\bin\64bit"; IconFilename: "{app}\bin\64bit\app_icon.ico"
@@ -108,19 +110,52 @@ Name: "{group}\Gỡ cài đặt {#AppFullName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppFullName}"; Filename: "{app}\bin\64bit\{#AppExeName}"; WorkingDir: "{app}\bin\64bit"; IconFilename: "{app}\bin\64bit\app_icon.ico"; Tasks: desktopicon
 
 [Run]
-#if VCRedistPath != ""
-Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Đang cài Microsoft Visual C++ Runtime..."; Flags: waituntilterminated runhidden; Check: NeedsVCRedist
-#endif
 Filename: "{app}\bin\64bit\{#AppExeName}"; WorkingDir: "{app}\bin\64bit"; Description: "Khởi chạy {#AppFullName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 function NeedsVCRedist: Boolean;
 var
   Installed: Cardinal;
+  VersionText: String;
+  InstalledVersion, RequiredVersion: Int64;
 begin
-  Result := not (RegQueryDWordValue(
-    HKLM64,
-    'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64',
-    'Installed',
-    Installed) and (Installed = 1));
+  Result := True;
+  if not RegQueryDWordValue(HKLM64,
+    'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Installed', Installed) then Exit;
+  if Installed <> 1 then Exit;
+  if not RegQueryStringValue(HKLM64,
+    'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Version', VersionText) then Exit;
+  if (Length(VersionText) > 0) and (Lowercase(Copy(VersionText, 1, 1)) = 'v') then
+    Delete(VersionText, 1, 1);
+  if not StrToVersion(VersionText, InstalledVersion) then Exit;
+  if not StrToVersion('{#MinimumVCRedistVersion}', RequiredVersion) then Exit;
+  Result := ComparePackedVersion(InstalledVersion, RequiredVersion) < 0;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Result := '';
+  if not NeedsVCRedist then Exit;
+  ExtractTemporaryFile('vc_redist.x64.exe');
+  // Keep the app per-user; elevate only Microsoft's machine-wide prerequisite.
+  if not ShellExec('runas', ExpandConstant('{tmp}\vc_redist.x64.exe'),
+    '/install /quiet /norestart', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    Result := 'Không thể cài Microsoft Visual C++ Runtime: ' + SysErrorMessage(ResultCode);
+    Exit;
+  end;
+  Log(Format('Visual C++ Redistributable exit code: %d', [ResultCode]));
+  if (ResultCode = 3010) or (ResultCode = 1641) then
+  begin
+    NeedsRestart := True;
+    Result := 'Vui lòng khởi động lại Windows rồi chạy lại bộ cài MediaSwitcher để hoàn tất cập nhật Visual C++ Runtime.';
+    Exit;
+  end;
+  // 1638 is acceptable only if a sufficient version is now registered.
+  if (ResultCode <> 0) and (ResultCode <> 1638) then
+    Result := Format('Cài Microsoft Visual C++ Runtime thất bại (mã %d). Kiểm tra log trong thư mục %%TEMP%%.', [ResultCode])
+  else if NeedsVCRedist then
+    Result := 'Microsoft Visual C++ Runtime x64 chưa đạt phiên bản {#MinimumVCRedistVersion}. Không thể tiếp tục cài đặt.';
 end;

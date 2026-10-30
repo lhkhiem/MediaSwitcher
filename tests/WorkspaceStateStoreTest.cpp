@@ -5,6 +5,7 @@
 #include <QFile>
 
 #include <iostream>
+#include <cmath>
 
 namespace {
 bool require(bool condition, const char* message) {
@@ -39,6 +40,29 @@ int main(int argc, char* argv[]) {
     original.programSourceId = 17;
     original.playlistLoop = false;
     original.playlistAutoNext = true;
+    original.fpsNumerator = 60000;
+    original.fpsDenominator = 1001;
+    original.programRenderMode = 1;
+    original.fadeDurationMs = 1500;
+    original.thumbnailWidth = 220;
+    original.sourceTypeFilter = 2;
+    original.previewPositionMs = 12345;
+    original.programPositionMs = 67890;
+    original.previewLoop = true;
+    original.programLoop = false;
+    original.previewVolume = 0.42f;
+    original.programVolume = 0.73f;
+    original.previewMuted = true;
+    original.programMuted = false;
+    original.outputScreenName = "Màn hình LED";
+    original.layoutMode = 1;
+    original.canvasWidth = 3840;
+    original.canvasHeight = 1080;
+    original.activeZoneIndex = 2;
+    original.blackoutAll = true;
+    original.zones[0] = {0, 0, 960, 1080, 1, 17, 4500, true, 0.8f, true, false};
+    original.zones[1] = {960, 0, 1920, 1080, 0, 29, 0, false, 1.0f, false, false};
+    original.zones[2] = {2880, 0, 960, 1080, 2, 17, 9200, false, 0.5f, true, true};
 
     std::string error;
     if (!store.save(original, error)) {
@@ -66,6 +90,36 @@ int main(int argc, char* argv[]) {
                  "Selection không được bảo toàn.")) return 1;
     if (!require(!restored.playlistLoop && restored.playlistAutoNext,
                  "Tuỳ chọn playlist không được bảo toàn.")) return 1;
+    if (!require(restored.fpsNumerator == 60000 && restored.fpsDenominator == 1001 &&
+                     restored.programRenderMode == 1 && restored.fadeDurationMs == 1500,
+                 "Thiết lập project không được bảo toàn.")) return 1;
+    if (!require(restored.thumbnailWidth == 220 && restored.sourceTypeFilter == 2,
+                 "Thiết lập giao diện không được bảo toàn.")) return 1;
+    if (!require(restored.previewPositionMs == 12345 && restored.programPositionMs == 67890 &&
+                     restored.previewLoop && !restored.programLoop,
+                 "Cue playback không được bảo toàn.")) return 1;
+    if (!require(std::abs(restored.previewVolume - 0.42f) < 0.001f &&
+                     std::abs(restored.programVolume - 0.73f) < 0.001f &&
+                     restored.previewMuted && !restored.programMuted,
+                 "Thiết lập âm thanh không được bảo toàn.")) return 1;
+    if (!require(restored.outputScreenName == original.outputScreenName,
+                 "Tên màn hình output không được bảo toàn.")) return 1;
+    if (!require(restored.layoutMode == 1 && restored.canvasWidth == 3840 && restored.canvasHeight == 1080 &&
+                     restored.activeZoneIndex == 2 && restored.blackoutAll,
+                 "Cấu hình tổng thể 3 vùng không được bảo toàn.")) return 1;
+    if (!require(restored.zones[0].width == 960 && restored.zones[0].sourceId == 17 && restored.zones[0].positionMs == 4500 &&
+                     restored.zones[1].x == 960 && restored.zones[1].sourceId == 29 && !restored.zones[1].muted &&
+                     restored.zones[2].x == 2880 && restored.zones[2].renderMode == 2 && restored.zones[2].blackout,
+                 "Chi tiết từng vùng trong chế độ 3 vùng không được bảo toàn.")) return 1;
+
+    QFile legacy(testFilePath);
+    if (!require(legacy.open(QIODevice::WriteOnly | QIODevice::Truncate),
+                 "Không thể tạo workspace v1 để kiểm thử migration.")) return 1;
+    legacy.write(R"({"format":"MediaSwitcherWorkspace","version":1,"sources":[],"playlist":{"sourceIds":[],"loop":true,"autoNext":false},"selection":{}})");
+    legacy.close();
+    if (!require(store.load(restored, error) == WorkspaceLoadStatus::Loaded &&
+                     restored.playlistLoop && !restored.playlistAutoNext && restored.fadeDurationMs == 700,
+                 "Workspace v1 không được migrate bằng giá trị mặc định an toàn.")) return 1;
 
     QFile corrupt(QString::fromStdWString(filePath.wstring()));
     if (!require(corrupt.open(QIODevice::WriteOnly | QIODevice::Truncate),
@@ -74,6 +128,21 @@ int main(int argc, char* argv[]) {
     corrupt.close();
     if (!require(store.load(restored, error) == WorkspaceLoadStatus::Invalid,
                  "Workspace JSON hỏng không bị từ chối an toàn.")) return 1;
+
+    const QString relinkPath = QDir::current().absoluteFilePath(QStringLiteral("media-relinked.mp4"));
+    QFile relinkFile(relinkPath);
+    if (!require(relinkFile.open(QIODevice::WriteOnly), "Không thể tạo file kiểm thử relink.")) return 1;
+    relinkFile.write("test");
+    relinkFile.close();
+    ObsSourceCatalog catalog;
+    const uint64_t sourceId = catalog.add(std::filesystem::path(L"D:/Media/missing.mp4"));
+    if (!require(catalog.relinkLocalFile(sourceId, std::filesystem::path(relinkPath.toStdWString())),
+                 "Không thể relink source tới file hợp lệ.")) return 1;
+    const auto relinked = catalog.find(sourceId);
+    if (!require(relinked && relinked->id == sourceId &&
+                     QString::fromStdWString(relinked->path.wstring()) == relinkPath,
+                 "Relink không giữ nguyên source ID hoặc đường dẫn mới.")) return 1;
+    QFile::remove(relinkPath);
 
     QFile::remove(testFilePath);
     return 0;

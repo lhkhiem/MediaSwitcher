@@ -151,7 +151,7 @@ WorkspaceLoadStatus WorkspaceStateStore::load(WorkspaceState& state, std::string
         const int fpsDenominator = project.value(QStringLiteral("fpsDenominator")).toInt(0);
         state.fpsNumerator = fpsNumerator > 0 ? static_cast<uint32_t>(fpsNumerator) : 0;
         state.fpsDenominator = fpsDenominator > 0 ? static_cast<uint32_t>(fpsDenominator) : 0;
-        state.programRenderMode = project.value(QStringLiteral("programRenderMode")).toInt(0);
+        state.programRenderMode = project.value(QStringLiteral("programRenderMode")).toInt(1);
         state.fadeDurationMs = std::clamp(project.value(QStringLiteral("fadeDurationMs")).toInt(700), 100, 10000);
 
         const QJsonObject interfaceState = root.value(QStringLiteral("interface")).toObject();
@@ -188,7 +188,7 @@ WorkspaceLoadStatus WorkspaceStateStore::load(WorkspaceState& state, std::string
                 zone.y = std::clamp(zoneObj.value(QStringLiteral("y")).toInt(zone.y), 0, 16384);
                 zone.width = std::clamp(zoneObj.value(QStringLiteral("width")).toInt(zone.width), 16, 16384);
                 zone.height = std::clamp(zoneObj.value(QStringLiteral("height")).toInt(zone.height), 16, 16384);
-                zone.renderMode = std::clamp(zoneObj.value(QStringLiteral("renderMode")).toInt(0), 0, 2);
+                zone.renderMode = std::clamp(zoneObj.value(QStringLiteral("renderMode")).toInt(1), 0, 2);
                 if (const auto srcId = parseSourceId(zoneObj.value(QStringLiteral("sourceId")))) {
                     zone.sourceId = *srcId;
                 } else {

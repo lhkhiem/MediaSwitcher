@@ -3,7 +3,7 @@
 
 #define AppName "MediaSwitcher"
 #define AppFullName "MediaSwitcher Studio"
-#define AppVersion "1.0.0"
+#define AppVersion "1.3.0"
 #define AppPublisher "Lê Khiêm"
 #define AppURL "https://lekhiem.io.vn"
 #define AppExeName "MediaSwitcher.exe"

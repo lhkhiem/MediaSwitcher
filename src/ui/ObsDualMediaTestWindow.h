@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include "engine/obs/ObsPlaybackBackend.h"
 
 class QLabel;
 class QImage;
@@ -64,6 +65,7 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
     void changeEvent(QEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     enum class UiLanguage { Vietnamese, English };
@@ -75,7 +77,7 @@ private:
         int y{0};
         int width{640};
         int height{1080};
-        ObsRenderMode renderMode;
+        ObsRenderMode renderMode{ObsRenderMode::FitToScreen};
         uint64_t sourceId{0};
         uint64_t pendingSourceId{0};
         int64_t pendingPositionMs{0};
@@ -88,7 +90,10 @@ private:
         std::unique_ptr<ObsPlaybackBackend> activeBackend;
         std::unique_ptr<ObsPlaybackBackend> pendingBackend;
         QWidget* cardWidget{nullptr};
-        QPushButton* targetButton{nullptr};
+        QWidget* sourceSlotWidget{nullptr};
+        QLabel* zoneTagBadge{nullptr};
+        QLabel* resolutionBadge{nullptr};
+        QLabel* sourceTypeIcon{nullptr};
         QLabel* infoLabel{nullptr};
         QLabel* statusBadge{nullptr};
         QLabel* timeLabel{nullptr};
@@ -113,6 +118,7 @@ private:
         QLabel* sourceLabel{nullptr};
         QLabel* timeLabel{nullptr};
         QLabel* statusLabel{nullptr};
+        QWidget* controlsWidget{nullptr};
         QSlider* seekSlider{nullptr};
         QPushButton* playPauseButton{nullptr};
         QPushButton* loopButton{nullptr};
@@ -170,6 +176,7 @@ private:
     void updateCopyrightDisplay();
     void showAboutDialog();
     QString localized(const char* vietnamese, const char* english) const;
+    QString localized(const QString& vietnamese, const QString& english) const;
     void bindLocalizedProperty(QObject* object, const char* propertyName, const char* vietnamese, const char* english);
     void applyLanguage();
     void setLanguage(int index);
@@ -251,6 +258,9 @@ private:
     void toggleZoneAudioMaster(int zoneIndex);
     void toggleZoneBlackout(int zoneIndex);
     void toggleBlackoutAll(bool checked);
+    void toggleAlwaysOnTop(bool enabled);
+    void toggleCompactMode(bool enabled);
+    void updateTripleDeckPresentation();
 
     Panel m_preview;
     Panel m_program;
@@ -269,8 +279,9 @@ private:
     QPushButton* m_cutButton{nullptr};
     QPushButton* m_fadeButton{nullptr};
     QPushButton* m_fullscreenButton{nullptr};
-    QPushButton* m_addSourceButton{nullptr};
-    QPushButton* m_workspaceButton{nullptr};
+    QAction* m_layoutSingleAction{nullptr};
+    QAction* m_layoutTripleAction{nullptr};
+    QAction* m_testPatternMenuAction{nullptr};
     QPushButton* m_openPlaylistButton{nullptr};
     QComboBox* m_catalogThumbnailSize{nullptr};
     QComboBox* m_sourceTypeFilter{nullptr};
@@ -321,7 +332,7 @@ private:
     bool m_playlistMode{false};
     bool m_playlistEditing{false};
     UiLanguage m_language{UiLanguage::Vietnamese};
-    ObsRenderMode m_selectedProgramRenderMode;
+    ObsRenderMode m_selectedProgramRenderMode{ObsRenderMode::FitToScreen};
     std::vector<uint64_t> m_playlistDraft;
     std::filesystem::path m_currentWorkspaceFile;
     std::string m_outputScreenName;
@@ -339,10 +350,24 @@ private:
     QImage m_testPatternImage;
     std::array<TripleZone, 3> m_tripleZones;
     QWidget* m_tripleDeckWidget{nullptr};
-    QComboBox* m_layoutModeSelector{nullptr};
+    QLabel* m_deckTitleLabel{nullptr};
     QPushButton* m_tripleConfigButton{nullptr};
     QPushButton* m_testPatternButton{nullptr};
     QPushButton* m_blackoutAllButton{nullptr};
+    QPushButton* m_deckPinButton{nullptr};
+    QPushButton* m_deckMiniButton{nullptr};
+    QLabel* m_deckActiveZoneBadge{nullptr};
     std::array<QPushButton*, 3> m_railZoneButtons{{nullptr, nullptr, nullptr}};
     QWidget* m_zoneSelectorContainer{nullptr};
+    QWidget* m_programTripleInfoBar{nullptr};
+    QLabel* m_canvasResolutionLabel{nullptr};
+    QLabel* m_activeTargetLabel{nullptr};
+    QLabel* m_outputStatusLabel{nullptr};
+    QWidget* m_previewPanel{nullptr};
+    QWidget* m_programPanel{nullptr};
+    QWidget* m_transitionWidget{nullptr};
+    QAction* m_alwaysOnTopAction{nullptr};
+    QAction* m_compactModeAction{nullptr};
+    bool m_alwaysOnTop{false};
+    bool m_compactMode{false};
 };

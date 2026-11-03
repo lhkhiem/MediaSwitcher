@@ -49,7 +49,7 @@ Bộ cài mới giữ nguyên cấu trúc `bin/64bit`, `data` và `obs-plugins` 
 Script sẽ build Release, kiểm tra đầy đủ dependency OBS/Qt, tìm Inno Setup 6 và Microsoft Visual C++ Redistributable, sau đó tạo file tại:
 
 ```text
-installer\output\MediaSwitcher-Setup-v1.0.0-x64.exe
+installer\output\MediaSwitcher-Setup-v1.3.0-x64.exe
 ```
 
 Dùng `-SkipBuild` chỉ khi `build-obs\obs-runtime-stage` vừa được build và đã kiểm tra. Bộ cài chỉ lấy dependency trong manifest; log, workspace, executable smoke test và DLL legacy còn sót trong thư mục build sẽ không được đóng gói.

@@ -1,6 +1,6 @@
 THÔNG TIN BẢN QUYỀN
 Tên ứng dụng: MediaSwitcher Studio
-Phiên bản: 1.0.0
+Phiên bản: 1.3.0
 Tác giả: Lê Khiêm
 
 MÔ TẢ

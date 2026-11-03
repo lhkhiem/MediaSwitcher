@@ -13,7 +13,7 @@ struct WorkspaceZoneState {
     int y{0};
     int width{640};
     int height{1080};
-    int renderMode{0};
+    int renderMode{1};
     uint64_t sourceId{0};
     int64_t positionMs{0};
     bool loop{false};
@@ -39,7 +39,7 @@ struct WorkspaceState {
     bool playlistAutoNext{true};
     uint32_t fpsNumerator{0};
     uint32_t fpsDenominator{0};
-    int programRenderMode{0};
+    int programRenderMode{1};
     int fadeDurationMs{700};
     int thumbnailWidth{192};
     int sourceTypeFilter{-1};

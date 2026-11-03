@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(MediaSwitcher VERSION 1.0.0 LANGUAGES CXX)
+project(MediaSwitcher VERSION 1.3.0 LANGUAGES CXX)
 
 include(CTest)
 

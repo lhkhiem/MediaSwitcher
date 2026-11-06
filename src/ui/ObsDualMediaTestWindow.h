@@ -87,6 +87,7 @@ private:
         bool audioMuted{false};
         bool blackout{false};
         bool sliderDragging{false};
+        bool pendingSwapPreview{false};
         std::unique_ptr<ObsPlaybackBackend> activeBackend;
         std::unique_ptr<ObsPlaybackBackend> pendingBackend;
         QWidget* cardWidget{nullptr};

@@ -1,4 +1,5 @@
 #include "app/WorkspaceStateStore.h"
+#include "engine/obs/ObsPlaylist.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -143,6 +144,31 @@ int main(int argc, char* argv[]) {
                      QString::fromStdWString(relinked->path.wstring()) == relinkPath,
                  "Relink không giữ nguyên source ID hoặc đường dẫn mới.")) return 1;
     QFile::remove(relinkPath);
+
+    // Kiểm thử hoạt động của ObsPlaylist: thêm, điều hướng, lặp, xoá và di chuyển
+    ObsPlaylist playlist;
+    if (!require(playlist.empty() && playlist.size() == 0, "Playlist mới khởi tạo phải rỗng.")) return 1;
+    playlist.addSource(101);
+    playlist.addSource(102);
+    playlist.addSource(103);
+    if (!require(playlist.size() == 3 && playlist.currentSourceId() == 101, "Playlist không thêm đúng 3 source.")) return 1;
+    if (!require(playlist.advance() && playlist.currentSourceId() == 102, "Playlist không chuyển tiếp đến source thứ 2.")) return 1;
+    if (!require(playlist.advance() && playlist.currentSourceId() == 103, "Playlist không chuyển tiếp đến source thứ 3.")) return 1;
+    playlist.setLoop(false);
+    if (!require(!playlist.advance(), "Playlist loop=false không được advance khi đã ở cuối.")) return 1;
+    playlist.setLoop(true);
+    if (!require(playlist.advance() && playlist.currentSourceId() == 101, "Playlist loop=true không quay lại đầu khi hết.")) return 1;
+    if (!require(playlist.previous() && playlist.currentSourceId() == 103, "Playlist loop=true previous từ đầu không lùi về cuối.")) return 1;
+    if (!require(playlist.move(2, 0) && playlist.sourceIdAt(0) == 103, "Di chuyển mục playlist thất bại.")) return 1;
+    if (!require(playlist.removeAt(0) && playlist.size() == 2, "Xoá mục playlist thất bại.")) return 1;
+
+    ObsPlaylist singleItemPlaylist;
+    singleItemPlaylist.addSource(200);
+    singleItemPlaylist.setLoop(false);
+    if (!require(!singleItemPlaylist.advance(), "Playlist 1 mục loop=false không được advance.")) return 1;
+    singleItemPlaylist.setLoop(true);
+    if (!require(singleItemPlaylist.advance() && singleItemPlaylist.currentSourceId() == 200,
+                 "Playlist 1 mục loop=true phải advance thành công và giữ nguyên source.")) return 1;
 
     QFile::remove(testFilePath);
     return 0;

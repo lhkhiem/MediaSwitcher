@@ -18,7 +18,13 @@ QString defaultDetails() {
         "Nhà phát triển / Tác giả: %4\n"
         "Đơn vị phát triển: %5\n\n"
         "MÔ TẢ\n\n%6\n\n"
-        "GIẤY PHÉP\n\n%7")
+        "GIẤY PHÉP\n\n%7\n\n"
+        "ỦNG HỘ / DONATE\n\n"
+        "- Ngân hàng: Vietcombank\n"
+        "- Số tài khoản: 0091000659934\n"
+        "- Chủ tài khoản: LÊ HOÀNG KHIÊM\n"
+        "- MoMo: 0886939879\n"
+        "Website: https://lekhiem.io.vn")
         .arg(AppInfo::COPYRIGHT,
              AppInfo::FULL_NAME,
              AppInfo::VERSION,

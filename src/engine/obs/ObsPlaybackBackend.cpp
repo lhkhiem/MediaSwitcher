@@ -16,7 +16,7 @@ extern "C" {
 
 namespace {
 constexpr const char* kSourceType = "ffmpeg_source";
-constexpr const char* kSourceName = "MediaSwitcher OBS Media Prototype";
+constexpr const char* kSourceName = "MediaSwitcher Media Prototype";
 
 std::string toUtf8Path(const std::filesystem::path& path) {
     return QString::fromStdWString(path.wstring()).toUtf8().toStdString();
@@ -200,7 +200,10 @@ void ObsPlaybackBackend::play() {
     if (!m_source || !m_supportsTransport) return;
 
     const ObsPlaybackState currentState = state();
-    const bool restartFromEnd = m_mediaEnded.load() || currentState == ObsPlaybackState::Ended;
+    const int64_t dur = durationMs();
+    const int64_t pos = positionMs();
+    const bool atOrPastEnd = (dur > 0 && pos >= dur - 250);
+    const bool restartFromEnd = m_mediaEnded.load() || currentState == ObsPlaybackState::Ended || atOrPastEnd;
     m_pauseRequested.store(false);
     // Recreate the monitor before resuming so it starts from OBS's current media clock.
     if (m_audioOutputEnabled && !setAudioMonitoring(true)) {
@@ -215,6 +218,18 @@ void ObsPlaybackBackend::play() {
     m_mediaEnded.store(false);
     LOG_INFO("OBS media: {} requested after audio monitor flush.",
              restartFromEnd ? "Restart from end" : "Play/resume");
+}
+
+void ObsPlaybackBackend::restart() {
+    if (!m_source || !m_supportsTransport) return;
+    m_pauseRequested.store(false);
+    if (m_audioOutputEnabled && !setAudioMonitoring(true)) {
+        LOG_ERROR("OBS media: Restart cancelled because audio monitoring could not be enabled.");
+        return;
+    }
+    obs_source_media_restart(m_source);
+    m_mediaEnded.store(false);
+    LOG_INFO("OBS media: Restart requested after audio monitor flush.");
 }
 
 void ObsPlaybackBackend::pause() {

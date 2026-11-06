@@ -14,7 +14,7 @@ if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
 
 Add-Type -AssemblyName System.Windows.Forms
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
-$dialog.Title = 'Chon media file cho MediaSwitcher OBS test'
+$dialog.Title = 'Chon media file cho MediaSwitcher test'
 $dialog.Filter = 'Media files|*.mp4;*.mkv;*.mov;*.avi;*.m4v;*.webm;*.mp3;*.wav;*.flac|All files|*.*'
 $dialog.Multiselect = $false
 
@@ -27,4 +27,4 @@ $mode = if ($Dual) { '--obs-dual-media-test' } else { '--obs-media-test' }
 $argument = '{0}="{1}"' -f $mode, $dialog.FileName
 Write-Host "Đang khởi động OBS media test:`n$($dialog.FileName)"
 Start-Process -FilePath $executable -ArgumentList $argument -WorkingDirectory (Split-Path -Parent $executable)
-Write-Host 'Lệnh đã được gửi. Kiểm tra cửa sổ MediaSwitcher OBS Media Test.'
+Write-Host 'Lệnh đã được gửi. Kiểm tra cửa sổ MediaSwitcher Media Test.'

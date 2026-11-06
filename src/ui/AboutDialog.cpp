@@ -99,8 +99,8 @@ void AboutDialog::setupUi() {
     mainLayout->addLayout(headerLayout);
 
     m_contentView = new QTextBrowser(this);
-    m_contentView->setOpenExternalLinks(false);
-    m_contentView->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+    m_contentView->setOpenExternalLinks(true);
+    m_contentView->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard | Qt::LinksAccessibleByMouse);
     mainLayout->addWidget(m_contentView, 1);
 
     auto* buttonBox = new QDialogButtonBox(this);

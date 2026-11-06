@@ -35,6 +35,7 @@ public:
     bool open(const ObsCatalogSource& source, bool startPaused = false);
     void close();
     void play();
+    void restart();
     void pause();
     void enforcePendingPause();
     void stop();
@@ -50,7 +51,16 @@ public:
     const std::filesystem::path& mediaPath() const { return m_path; }
     void setLooping(bool enabled);
     bool isLooping() const { return m_looping; }
-    bool hasEnded() const { return m_mediaEnded.load(); }
+    bool hasEnded() const {
+        if (m_mediaEnded.load()) return true;
+        if (m_source && m_supportsTransport) {
+            const ObsPlaybackState st = state();
+            if (st == ObsPlaybackState::Ended) return true;
+            const int64_t dur = durationMs();
+            if (dur > 0 && positionMs() >= dur - 100) return true;
+        }
+        return false;
+    }
     void setAudioOutputEnabled(bool enabled);
     bool isAudioOutputEnabled() const { return m_audioOutputEnabled; }
     void setVolume(float volume);

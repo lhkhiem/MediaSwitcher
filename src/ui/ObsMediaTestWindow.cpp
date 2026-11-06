@@ -30,7 +30,7 @@ QString formatMilliseconds(int64_t value) {
 
 ObsMediaTestWindow::ObsMediaTestWindow(ObsContext& context, const std::filesystem::path& mediaPath, QWidget* parent)
     : QWidget(parent), m_backend(std::make_unique<ObsPlaybackBackend>(context)) {
-    setWindowTitle(QStringLiteral("MediaSwitcher OBS Media Test"));
+    setWindowTitle(QStringLiteral("MediaSwitcher Media Test"));
     resize(960, 620);
     setFocusPolicy(Qt::StrongFocus);
 

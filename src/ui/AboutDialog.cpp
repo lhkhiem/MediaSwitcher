@@ -12,15 +12,17 @@
 #include <QTextBrowser>
 #include <QVBoxLayout>
 
-AboutDialog::AboutDialog(QWidget* parent)
-    : QDialog(parent)
+AboutDialog::AboutDialog(QWidget* parent, bool vietnamese)
+    : QDialog(parent), m_vietnamese(vietnamese)
 {
     setupUi();
     loadContent();
 }
 
 void AboutDialog::setupUi() {
-    setWindowTitle(QStringLiteral("Về phần mềm & Bản quyền - MediaSwitcher"));
+    setWindowTitle(m_vietnamese
+        ? QStringLiteral("Về phần mềm & Bản quyền - MediaSwitcher")
+        : QStringLiteral("About & Copyright - MediaSwitcher"));
     resize(700, 620);
     setMinimumSize(560, 500);
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
@@ -84,11 +86,17 @@ void AboutDialog::setupUi() {
     titleLabel->setTextFormat(Qt::PlainText);
     titleLabel->setStyleSheet(QStringLiteral("font-size: 20px; font-weight: bold; color: #FFFFFF;"));
     auto* versionLabel = new QLabel(
-        QStringLiteral("Phiên bản %1 (Build %2)").arg(AppInfo::VERSION, AppInfo::BUILD_DATE), this);
+        (m_vietnamese
+            ? QStringLiteral("Phiên bản %1 (Build %2)")
+            : QStringLiteral("Version %1 (Build %2)"))
+            .arg(AppInfo::VERSION, AppInfo::BUILD_DATE), this);
     versionLabel->setTextFormat(Qt::PlainText);
     versionLabel->setStyleSheet(QStringLiteral("font-size: 12px; color: #00E5FF; font-weight: bold;"));
     auto* hintLabel = new QLabel(
-        QStringLiteral("Nội dung được đóng gói từ copyright.txt và chỉ hiển thị trong bản production."), this);
+        m_vietnamese
+            ? QStringLiteral("Nội dung được đóng gói từ copyright.txt và chỉ hiển thị trong bản production.")
+            : QStringLiteral("Content packaged from copyright.txt and displayed for production."),
+        this);
     hintLabel->setTextFormat(Qt::PlainText);
     hintLabel->setWordWrap(true);
     hintLabel->setStyleSheet(QStringLiteral("font-size: 11px; color: #AAAAAA;"));
@@ -104,7 +112,9 @@ void AboutDialog::setupUi() {
     mainLayout->addWidget(m_contentView, 1);
 
     auto* buttonBox = new QDialogButtonBox(this);
-    auto* closeButton = buttonBox->addButton(QStringLiteral("Đóng"), QDialogButtonBox::RejectRole);
+    auto* closeButton = buttonBox->addButton(
+        m_vietnamese ? QStringLiteral("Đóng") : QStringLiteral("Close"),
+        QDialogButtonBox::RejectRole);
     connect(closeButton, &QPushButton::clicked, this, &QDialog::reject);
     mainLayout->addWidget(buttonBox);
 }

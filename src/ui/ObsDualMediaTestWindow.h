@@ -16,6 +16,7 @@
 
 class QLabel;
 class QImage;
+class QBoxLayout;
 class QComboBox;
 class QCheckBox;
 class QListWidget;
@@ -106,6 +107,7 @@ private:
         QPushButton* muteButton{nullptr};
         QPushButton* blackoutButton{nullptr};
         QPushButton* takeButton{nullptr};
+        QString rawDisplayName;
     };
 
     struct Panel {
@@ -175,6 +177,7 @@ private:
     void updateAudioMeters();
     void updateProcessMetrics();
     void updateCopyrightDisplay();
+    void updateFullscreenUi();
     void showAboutDialog();
     QString localized(const char* vietnamese, const char* english) const;
     QString localized(const QString& vietnamese, const QString& english) const;
@@ -280,6 +283,10 @@ private:
     QPushButton* m_cutButton{nullptr};
     QPushButton* m_fadeButton{nullptr};
     QPushButton* m_fullscreenButton{nullptr};
+    QMenu* m_fileMenu{nullptr};
+    QMenu* m_inputMenu{nullptr};
+    QMenu* m_layoutMenu{nullptr};
+    QMenu* m_outputMenu{nullptr};
     QAction* m_layoutSingleAction{nullptr};
     QAction* m_layoutTripleAction{nullptr};
     QAction* m_testPatternMenuAction{nullptr};
@@ -351,19 +358,22 @@ private:
     QImage m_testPatternImage;
     std::array<TripleZone, 3> m_tripleZones;
     QWidget* m_tripleDeckWidget{nullptr};
+    QBoxLayout* m_tripleCardsLayout{nullptr};
     QLabel* m_deckTitleLabel{nullptr};
     QPushButton* m_tripleConfigButton{nullptr};
     QPushButton* m_testPatternButton{nullptr};
     QPushButton* m_blackoutAllButton{nullptr};
+    QPushButton* m_deckFullscreenButton{nullptr};
     QPushButton* m_deckPinButton{nullptr};
     QPushButton* m_deckMiniButton{nullptr};
     QLabel* m_deckActiveZoneBadge{nullptr};
+    std::array<QPushButton*, 3> m_deckZoneButtons{{nullptr, nullptr, nullptr}};
     std::array<QPushButton*, 3> m_railZoneButtons{{nullptr, nullptr, nullptr}};
     QWidget* m_zoneSelectorContainer{nullptr};
     QWidget* m_programTripleInfoBar{nullptr};
     QLabel* m_canvasResolutionLabel{nullptr};
     QLabel* m_activeTargetLabel{nullptr};
-    QLabel* m_outputStatusLabel{nullptr};
+    QPushButton* m_outputStatusButton{nullptr};
     QWidget* m_previewPanel{nullptr};
     QWidget* m_programPanel{nullptr};
     QWidget* m_transitionWidget{nullptr};
